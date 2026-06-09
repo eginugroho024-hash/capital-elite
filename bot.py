@@ -11,7 +11,7 @@ import time
 # ==============================
 # CONFIG
 # ==============================
-TOKEN = "8081714058:AAGsVw2JrSTfCjxK87wd8du4NfLTZQDWUPs"
+TOKEN = "8081714058:AAElHaf7eKJb3HloHpr1A37qgg9BcPztev4"
 ADMIN_ID = 7889334774  # ganti kalau ID admin lu beda
 
 USER_FILE = "users.json"
