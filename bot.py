@@ -11,7 +11,9 @@ import time
 # ==============================
 # CONFIG
 # ==============================
-TOKEN = "8081714058:AAElHaf7eKJb3HloHpr1A37qgg9BcPztev4"
+import os
+
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 ADMIN_ID = 7889334774  # ganti kalau ID admin lu beda
 
 USER_FILE = "users.json"
