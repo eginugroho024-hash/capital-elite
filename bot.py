@@ -177,12 +177,19 @@ def dynamic_sl_tp(pair_key, signal, entry, high, low):
 def get_market_analysis(pair_key, tf_key):
     pair = PAIRS[pair_key]
 
+    tf_key = str(tf_key).upper().strip()
+
+    if tf_key not in TIMEFRAMES:
+        tf_key = "M5"
+
     def fetch_tf(tf):
+        tv_interval = TIMEFRAMES.get(tf, "5m")
+
         handler = TA_Handler(
             symbol=pair["symbol"],
             screener=pair["screener"],
             exchange=pair["exchange"],
-            interval=TIMEFRAMES[tf]
+            interval=tv_interval
         )
         data = handler.get_analysis()
         ind = data.indicators
