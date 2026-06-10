@@ -1012,7 +1012,54 @@ async def marketnews_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             except Exception:
                 pass
     await update.message.reply_text(f"Market news terkirim ke {sent} premium user.")
+import random
 
+async def auto_broadcast(context):
+    pesan = random.choice([
+        """📢 Mau Akses Bot Analisa Trading?
+
+✅ Analisa Market Harian
+✅ Area Entry Potensial
+✅ Market Outlook
+✅ Update News Penting
+
+💬 Chat Admin untuk mendapatkan akses.
+
+⚠️ DISCLAIMER
+
+Bukan saran finansial (Not Financial Advice).
+
+Trading forex, crypto, dan instrumen keuangan lainnya memiliki risiko tinggi dan dapat menyebabkan kerugian sebagian maupun seluruh modal.
+""",
+
+        """🚀 Trading Lebih Terarah
+
+Jangan asal buy atau sell tanpa rencana.
+
+🎯 Tunggu setup
+🎯 Kelola risiko
+🎯 Ikuti disiplin
+
+💬 Chat Admin untuk mendapatkan akses.
+
+⚠️ DISCLAIMER
+
+Bukan saran finansial (Not Financial Advice).
+
+Segala keputusan trading sepenuhnya menjadi tanggung jawab masing-masing pengguna.
+"""
+    ])
+
+    users = load_users()
+
+    for uid in users.keys():
+        try:
+            await context.bot.send_message(
+                chat_id=int(uid),
+                text=pesan
+            )
+        except:
+            pass
 # ==============================
 # RUN APP
 # ==============================
@@ -1028,6 +1075,15 @@ app.add_handler(CommandHandler("risk", risk_command))
 app.add_handler(CommandHandler("edukasi", edukasi_command))
 app.add_handler(CommandHandler("marketnews", marketnews_command))
 app.add_handler(CallbackQueryHandler(button))
+app.add_handler(CallbackQueryHandler(button))
 
+app.job_queue.run_repeating(
+    auto_broadcast,
+    interval=7200,
+    first=300
+)
+
+print("CAPITAL ELITE PROJECT BOT ONLINE...")
+app.run_polling()
 print("CAPITAL ELITE PROJECT BOT ONLINE...")
 app.run_polling()
