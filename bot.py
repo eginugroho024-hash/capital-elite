@@ -15,7 +15,7 @@ import os
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 ADMIN_ID = 7889334774  # ganti kalau ID admin lu beda
-
+FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
 USER_FILE = "users.json"
 TRIAL_LIMIT_MARKET = 5
 TRIAL_LIMIT_NEWS = 3
@@ -1060,6 +1060,61 @@ Segala keputusan trading sepenuhnya menjadi tanggung jawab masing-masing penggun
             )
         except:
             pass
+async def auto_broadcast(context):
+    ...
+
+async def auto_news_alert(context):
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        url = f"https://financialmodelingprep.com/api/v3/economic_calendar?from={today}&to={today}&apikey={FMP_API_KEY}"
+
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        users = load_users()
+
+        for event in data:
+            event_name = str(event.get("event", "")).lower()
+            country = str(event.get("country", "")).upper()
+
+            if country == "USD" and (
+                "cpi" in event_name or
+                "consumer price index" in event_name or
+                "core cpi" in event_name or
+                "nfp" in event_name or
+                "fomc" in event_name
+            ):
+                text = f"""
+📰 CAPITAL ELITE NEWS ALERT
+
+🔥 High Impact News Detected
+
+Event:
+{event.get('event')}
+
+Country:
+{country}
+
+Date:
+{event.get('date')}
+
+⚠️ Hindari entry besar menjelang news.
+Tunggu market kasih arah yang jelas.
+
+⚠️ Not Financial Advice
+Trading memiliki risiko tinggi.
+"""
+
+                for uid in users.keys():
+                    try:
+                        await context.bot.send_message(chat_id=int(uid), text=text)
+                    except:
+                        pass
+
+    except Exception as e:
+        print("NEWS ERROR:", e)
+
+# ===========================
+# RUN APP
 # ==============================
 # RUN APP
 # ==============================
@@ -1075,7 +1130,6 @@ app.add_handler(CommandHandler("risk", risk_command))
 app.add_handler(CommandHandler("edukasi", edukasi_command))
 app.add_handler(CommandHandler("marketnews", marketnews_command))
 app.add_handler(CallbackQueryHandler(button))
-app.add_handler(CallbackQueryHandler(button))
 
 app.job_queue.run_repeating(
     auto_broadcast,
@@ -1083,7 +1137,13 @@ app.job_queue.run_repeating(
     first=300
 )
 
+from datetime import time
+
+app.job_queue.run_daily(
+    auto_news_alert,
+    time=time(hour=0, minute=30)
+)
+
 print("CAPITAL ELITE PROJECT BOT ONLINE...")
 app.run_polling()
-print("CAPITAL ELITE PROJECT BOT ONLINE...")
-app.run_polling()
+
