@@ -1078,62 +1078,56 @@ Segala keputusan trading sepenuhnya menjadi tanggung jawab masing-masing penggun
             pass
 async def auto_news_alert(context):
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
-        url = f"https://financialmodelingprep.com/api/v3/economic_calendar?from={today}&to={today}&apikey={FMP_API_KEY}"
+        events = parse_forex_factory_today()
 
-        response = requests.get(url, timeout=10)
-        data = response.json()
-
-        if not isinstance(data, list):
-            print("NEWS API RESPONSE:", data)
+        if not events:
+            print("FOREX FACTORY: Tidak ada news USD penting / gagal dibaca")
             return
 
         users = load_users()
+        today = (datetime.utcnow() + timedelta(hours=7)).strftime("%d %b %Y")
 
-        for event in data:
-            if not isinstance(event, dict):
-                continue
+        text = f"""
+📰 <b>CAPITAL ELITE NEWS INTELLIGENCE</b>
 
-            event_name = str(event.get("event", "")).lower()
-            country = str(event.get("country", "")).upper()
+🔥 <b>HIGH IMPACT NEWS DETECTED</b>
 
-            if country == "USD" and (
-                "cpi" in event_name or
-                "consumer price index" in event_name or
-                "core cpi" in event_name or
-                "nfp" in event_name or
-                "fomc" in event_name
-            ):
-                text = f"""
-📰 CAPITAL ELITE NEWS ALERT
+📅 <b>Date</b>
+{today}
 
-🔥 High Impact News Detected
+📊 <b>USD News Watch</b>
+"""
 
-Event:
-{event.get('event')}
+        for ev in events[:5]:
+            text += f"\n• <b>USD {ev['impact']}</b>\n{ev['raw'][:120]}\n"
 
-Country:
-{country}
+        text += """
+⚠️ <b>Market Focus</b>
+XAUUSD • BTCUSD • ETHUSD
 
-Date:
-{event.get('date')}
+🚫 <b>No Trade Zone</b>
+Hindari entry besar menjelang news.
+Tunggu spread normal dan candle close setelah news.
 
-⚠️ Hindari entry besar menjelang news.
-Tunggu market kasih arah yang jelas.
+🧠 <b>Elite Note</b>
+Jangan nebak news. Tunggu market kasih arah.
 
 ⚠️ Not Financial Advice
 Trading memiliki risiko tinggi.
 """
 
-                for uid in users.keys():
-                    try:
-                        await context.bot.send_message(chat_id=int(uid), text=text)
-                    except:
-                        pass
+        for uid in users.keys():
+            try:
+                await context.bot.send_message(
+                    chat_id=int(uid),
+                    text=text,
+                    parse_mode="HTML"
+                )
+            except:
+                pass
 
     except Exception as e:
-        print("NEWS ERROR:", e)
-
+        print("FOREX FACTORY NEWS ERROR:", e)
 # ===========================
 # RUN APP
 # ==============================
