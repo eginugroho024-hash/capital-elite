@@ -647,7 +647,8 @@ CPI • NFP • FOMC • PMI
 
 🟢 <b>Engine Online</b>
 Gas pilih menu di bawah
-link group ada di bio.
+
+link group ada di bio
 """
 
     keyboard = [
