@@ -404,7 +404,7 @@ Trading mengandung risiko — kelola modal dengan bijak.
 💱 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
 <b>{signal_label}</b>
 
-⚡ <b>Gas Kecil</b>
+⚡ <b>Agressive</b>
 <code>{fmt(aggressive_low)} - {fmt(aggressive_high)}</code>
 
 💎 <b>Sniper Zone</b>
@@ -803,7 +803,8 @@ Bot signal SMC buat bantu cari area entry yang lebih presisi.
 
 💳 <b>Payment</b>
 <code>{PAYMENT_TEXT}</code>
-
+Mau Akses Bot Gratis ?
+Hubungi Admin S&K Berlaku
 📩 <b>Admin</b>
 {ADMIN_CONTACT}
 
