@@ -6,7 +6,7 @@ import json
 import os
 import re
 import requests
-import time
+import time as pytime
 
 # ==============================
 # CONFIG
@@ -233,13 +233,13 @@ def get_market_analysis(pair_key, tf_key):
 
     try:
         tf_data = fetch_tf(tf_key)
-        time.sleep(1.6)
+        pytime.sleep(1.6)
 
         h1 = fetch_tf("H1") if tf_key != "H1" else tf_data
-        time.sleep(1.6)
+        pytime.sleep(1.6)
 
         m15 = fetch_tf("M15") if tf_key != "M15" else tf_data
-        time.sleep(1.6)
+        pytime.sleep(1.6)
 
         m5 = fetch_tf("M5") if tf_key != "M5" else tf_data
 
