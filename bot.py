@@ -199,6 +199,55 @@ def clean_num(value):
 def wib_now():
     return datetime.utcnow() + timedelta(hours=7)
 
+def convert_ff_time_to_wib(raw_text):
+    """
+    Convert jam Forex Factory seperti 7:30am / 8:30pm ke WIB.
+    Catatan: Forex Factory default sering tampil ET/New York.
+    ET ke WIB:
+    - Saat EDT (umumnya Mar-Nov): +11 jam
+    - Saat EST (umumnya Nov-Mar): +12 jam
+    Agar aman untuk mayoritas periode market aktif, default pakai +11 jam.
+    """
+    try:
+        raw_text = str(raw_text).lower()
+        match = re.search(r"(\d{1,2}):(\d{2})\s*(am|pm)", raw_text)
+        if not match:
+            return "WIB N/A"
+
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        ampm = match.group(3)
+
+        if ampm == "pm" and hour != 12:
+            hour += 12
+        elif ampm == "am" and hour == 12:
+            hour = 0
+
+        ff_time = datetime.utcnow().replace(
+            hour=hour,
+            minute=minute,
+            second=0,
+            microsecond=0
+        )
+
+        # Default Forex Factory ET/EDT -> WIB kira-kira +11 jam
+        wib_time = ff_time + timedelta(hours=11)
+        return wib_time.strftime("%H:%M WIB")
+
+    except Exception:
+        return "WIB N/A"
+
+
+def clean_ff_event_text(raw_text):
+    """
+    Bersihin teks event Forex Factory biar tidak dobel jam.
+    """
+    raw_text = str(raw_text)
+    raw_text = re.sub(r"\b\d{1,2}:\d{2}\s*(am|pm)\b", "", raw_text, flags=re.I)
+    raw_text = re.sub(r"\s+", " ", raw_text).strip()
+    return raw_text
+
+
 
 def is_trade_signal_text(text):
     bad_words = ["DEBUG ERROR", "NO SETUP", "Market Engine", "ERROR"]
@@ -732,6 +781,7 @@ Pilih fitur di bawah dan ikuti setup dengan disiplin.
 
     keyboard = [
         [InlineKeyboardButton("📊 Scan Market", callback_data="menu_pairs")],
+        [InlineKeyboardButton("🎯 Sniper Scanner", callback_data="sniper_menu")],
         [InlineKeyboardButton("📰 News Desk", callback_data="menu_news")],
         [InlineKeyboardButton("👤 Akun", callback_data="account")],
         [InlineKeyboardButton("💎 Upgrade", callback_data="upgrade")],
@@ -796,6 +846,126 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             hasil = "Error ambil data market: " + str(e)
         keyboard = [[InlineKeyboardButton("🔁 Analisa Lagi", callback_data=f"pair_{pair_key}")], [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_start")]]
         await q.edit_message_text(hasil, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+    elif data == "sniper_menu":
+        if not can_use_market(user_id):
+            await q.edit_message_text(
+                "🔒 <b>TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses Sniper Scanner.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Upgrade Premium", callback_data="upgrade")]]),
+                parse_mode="HTML"
+            )
+            return
+        keyboard = [
+            [InlineKeyboardButton("🎯 Scan XAUUSD", callback_data="sniper_XAUUSD")],
+            [InlineKeyboardButton("🎯 Scan BTCUSD", callback_data="sniper_BTCUSD")],
+            [InlineKeyboardButton("🎯 Scan ETHUSD", callback_data="sniper_ETHUSD")],
+            [InlineKeyboardButton("⬅️ Kembali", callback_data="back_start")]
+        ]
+        await q.edit_message_text(
+            "🎯 <b>CAPITAL ELITE SNIPER SCANNER</b>\n\nScan multi-timeframe M1 • M5 • M15 • H1 untuk cari confluence.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+
+    elif data.startswith("sniper_"):
+        pair_key = data.replace("sniper_", "")
+        await q.edit_message_text(
+            f"🎯 <b>Scanning {PAIRS[pair_key]['name']}</b>\n\nM1 • M5 • M15 • H1\nMohon tunggu sebentar...",
+            parse_mode="HTML"
+        )
+
+        scan_tfs = ["M1", "M5", "M15", "H1"]
+        results = []
+        buy_count = 0
+        sell_count = 0
+        total_conf = 0
+
+        for tf in scan_tfs:
+            hasil = get_market_analysis(pair_key, tf)
+            direction = extract_direction_from_text(hasil)
+            conf = extract_confidence_from_text(hasil)
+            total_conf += conf
+
+            if direction == "BUY":
+                buy_count += 1
+                icon = "🟢 BUY"
+            elif direction == "SELL":
+                sell_count += 1
+                icon = "🔴 SELL"
+            elif direction == "NO SETUP":
+                icon = "⚪ NO SETUP"
+            else:
+                icon = "🟡 MIXED"
+
+            results.append((tf, icon, conf))
+            pytime.sleep(1.2)
+
+        if buy_count > sell_count:
+            final_bias = "🟢 BUY DOMINANT"
+            action = "Cari buy setelah retracement / validasi M5."
+        elif sell_count > buy_count:
+            final_bias = "🔴 SELL DOMINANT"
+            action = "Cari sell setelah pullback / validasi M5."
+        else:
+            final_bias = "🟡 MIXED / WAIT"
+            action = "Market belum satu arah. Jangan maksa entry."
+
+        avg_conf = int(total_conf / max(len(scan_tfs), 1))
+        confluence = max(buy_count, sell_count)
+
+        if confluence >= 3 and avg_conf >= 75:
+            grade = "A+ SNIPER WATCH"
+        elif confluence >= 3:
+            grade = "A SETUP WATCH"
+        elif confluence == 2:
+            grade = "B WAIT CONFIRMATION"
+        else:
+            grade = "C NO TRADE"
+
+        lines = ""
+        for tf, icon, conf in results:
+            lines += f"{tf:<4} : <b>{icon}</b> • {conf}%\n"
+
+        add_market_usage(user_id)
+        user = get_user(user_id)
+        trial_note = ""
+        if not user["premium"]:
+            trial_note = f"\n\n🆓 Sisa trial market: {TRIAL_LIMIT_MARKET - user['market_used']} analisa"
+
+        text = f"""
+🎯 <b>CAPITAL ELITE SNIPER SCANNER</b>
+<code>{PAIRS[pair_key]['name']} • Multi-Timeframe Confluence</code>
+
+{lines}
+📊 <b>Confluence</b>
+<b>{confluence}/4</b> timeframe searah
+
+🔥 <b>Average Confidence</b>
+<b>{avg_conf}%</b> {conf_bar(avg_conf)}
+
+🏆 <b>Grade</b>
+<b>{grade}</b>
+
+🧭 <b>Final Bias</b>
+{final_bias}
+
+📌 <b>Action Plan</b>
+{action}
+
+⚠️ <b>Elite Rule</b>
+Scanner ini bukan tombol all-in.
+Tetap tunggu candle valid dan jaga risk.
+
+⚠️ Not Financial Advice
+Trading memiliki risiko tinggi.
+{trial_note}
+"""
+        await q.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="back_start")]]),
+            parse_mode="HTML"
+        )
+
 
     elif data == "menu_news":
         if not can_use_news(user_id):
@@ -903,6 +1073,235 @@ Hubungi Admin — S&K berlaku.
     elif data == "back_start":
         text, keyboard = main_menu(user_id)
         await q.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+
+# ==============================
+# SELF ANALYSIS COMMANDS
+# ==============================
+def normalize_command_tf(args, default="M5"):
+    if not args:
+        return default
+    tf = str(args[0]).upper().strip()
+    aliases = {
+        "1M": "M1", "M1": "M1",
+        "3M": "M3", "M3": "M3",
+        "5M": "M5", "M5": "M5",
+        "15M": "M15", "M15": "M15",
+        "30M": "M30", "M30": "M30",
+        "1H": "H1", "H1": "H1",
+        "4H": "H4", "H4": "H4",
+        "D1": "DAILY", "1D": "DAILY", "DAILY": "DAILY"
+    }
+    return aliases.get(tf, default)
+
+
+async def manual_analysis_command(update: Update, context: ContextTypes.DEFAULT_TYPE, pair_key: str):
+    user_id = update.effective_user.id
+
+    if not can_use_market(user_id):
+        await update.message.reply_text(
+            "🔒 <b>TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses unlimited.\n\n💬 Chat Admin: " + ADMIN_CONTACT,
+            parse_mode="HTML"
+        )
+        return
+
+    tf_key = normalize_command_tf(context.args, "M5")
+
+    await update.message.reply_text(
+        f"🔍 <b>CAPITAL ELITE SCANNING</b>\n\nPair: <b>{PAIRS[pair_key]['name']}</b>\nTimeframe: <b>{tf_key}</b>\n\n⚡ Validating market structure...",
+        parse_mode="HTML"
+    )
+
+    hasil = get_market_analysis(pair_key, tf_key)
+    add_market_usage(user_id)
+
+    user = get_user(user_id)
+    if not user["premium"]:
+        hasil += f"\n\n🆓 Sisa trial market: {TRIAL_LIMIT_MARKET - user['market_used']} analisa"
+
+    await update.message.reply_text(hasil, parse_mode="HTML")
+
+
+async def xau_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await manual_analysis_command(update, context, "XAUUSD")
+
+
+async def xag_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await manual_analysis_command(update, context, "XAGUSD")
+
+
+async def btc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await manual_analysis_command(update, context, "BTCUSD")
+
+
+async def eth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await manual_analysis_command(update, context, "ETHUSD")
+
+
+def extract_confidence_from_text(text):
+    m = re.search(r"Confidence\s*</b>\s*<b>(\d+)%", text)
+    if not m:
+        m = re.search(r"Confidence\s*[: ]+\s*(\d+)%", text, re.I)
+    if not m:
+        return 0
+    try:
+        return int(m.group(1))
+    except Exception:
+        return 0
+
+
+def extract_direction_from_text(text):
+    if "BUY SETUP" in text or "🟢" in text:
+        return "BUY"
+    if "SELL SETUP" in text or "🔴" in text:
+        return "SELL"
+    if "NO SETUP" in text:
+        return "NO SETUP"
+    return "MIXED"
+
+
+async def sniper_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if not can_use_market(user_id):
+        await update.message.reply_text(
+            "🔒 <b>TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses Sniper Scanner.\n\n💬 Chat Admin: " + ADMIN_CONTACT,
+            parse_mode="HTML"
+        )
+        return
+
+    pair_key = "XAUUSD"
+    if context.args:
+        raw_pair = str(context.args[0]).upper().strip()
+        pair_alias = {
+            "XAU": "XAUUSD", "GOLD": "XAUUSD", "XAUUSD": "XAUUSD",
+            "XAG": "XAGUSD", "SILVER": "XAGUSD", "XAGUSD": "XAGUSD",
+            "BTC": "BTCUSD", "BTCUSD": "BTCUSD",
+            "ETH": "ETHUSD", "ETHUSD": "ETHUSD"
+        }
+        pair_key = pair_alias.get(raw_pair, "XAUUSD")
+
+    await update.message.reply_text(
+        f"🎯 <b>CAPITAL ELITE SNIPER SCANNER</b>\n\nScanning <b>{PAIRS[pair_key]['name']}</b> across M1 • M5 • M15 • H1...\n\nMohon tunggu sebentar.",
+        parse_mode="HTML"
+    )
+
+    scan_tfs = ["M1", "M5", "M15", "H1"]
+    results = []
+    buy_count = 0
+    sell_count = 0
+    total_conf = 0
+
+    for tf in scan_tfs:
+        hasil = get_market_analysis(pair_key, tf)
+        direction = extract_direction_from_text(hasil)
+        conf = extract_confidence_from_text(hasil)
+        total_conf += conf
+
+        if direction == "BUY":
+            buy_count += 1
+            icon = "🟢 BUY"
+        elif direction == "SELL":
+            sell_count += 1
+            icon = "🔴 SELL"
+        elif direction == "NO SETUP":
+            icon = "⚪ NO SETUP"
+        else:
+            icon = "🟡 MIXED"
+
+        results.append((tf, icon, conf))
+        pytime.sleep(1.2)
+
+    if buy_count > sell_count:
+        final_bias = "🟢 BUY DOMINANT"
+        action = "Cari buy setelah retracement / validasi M5."
+    elif sell_count > buy_count:
+        final_bias = "🔴 SELL DOMINANT"
+        action = "Cari sell setelah pullback / validasi M5."
+    else:
+        final_bias = "🟡 MIXED / WAIT"
+        action = "Market belum satu arah. Jangan maksa entry."
+
+    avg_conf = int(total_conf / max(len(scan_tfs), 1))
+    confluence = max(buy_count, sell_count)
+
+    if confluence >= 3 and avg_conf >= 75:
+        grade = "A+ SNIPER WATCH"
+    elif confluence >= 3:
+        grade = "A SETUP WATCH"
+    elif confluence == 2:
+        grade = "B WAIT CONFIRMATION"
+    else:
+        grade = "C NO TRADE"
+
+    lines = ""
+    for tf, icon, conf in results:
+        lines += f"{tf:<4} : <b>{icon}</b> • {conf}%\n"
+
+    add_market_usage(user_id)
+    user = get_user(user_id)
+    trial_note = ""
+    if not user["premium"]:
+        trial_note = f"\n\n🆓 Sisa trial market: {TRIAL_LIMIT_MARKET - user['market_used']} analisa"
+
+    text = f"""
+🎯 <b>CAPITAL ELITE SNIPER SCANNER</b>
+<code>{PAIRS[pair_key]['name']} • Multi-Timeframe Confluence</code>
+
+{lines}
+📊 <b>Confluence</b>
+<b>{confluence}/4</b> timeframe searah
+
+🔥 <b>Average Confidence</b>
+<b>{avg_conf}%</b> {conf_bar(avg_conf)}
+
+🏆 <b>Grade</b>
+<b>{grade}</b>
+
+🧭 <b>Final Bias</b>
+{final_bias}
+
+📌 <b>Action Plan</b>
+{action}
+
+⚠️ <b>Elite Rule</b>
+Scanner ini bukan tombol all-in.
+Tetap tunggu candle valid dan jaga risk.
+
+⚠️ Not Financial Advice
+Trading memiliki risiko tinggi.
+{trial_note}
+"""
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def commands_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = """
+👑 <b>CAPITAL ELITE COMMAND CENTER</b>
+
+📊 <b>Manual Analysis</b>
+<code>/xau m5</code> — Analisa XAUUSD
+<code>/btc h1</code> — Analisa BTCUSD
+<code>/eth m15</code> — Analisa ETHUSD
+<code>/xag m5</code> — Analisa XAGUSD
+
+🎯 <b>Sniper Scanner</b>
+<code>/sniper</code> — Scan XAUUSD
+<code>/sniper btc</code> — Scan BTCUSD
+<code>/sniper eth</code> — Scan ETHUSD
+
+🛡️ <b>Risk Calculator</b>
+<code>/risk 100000 5</code>
+
+📰 <b>News</b>
+<code>/news cpi actual=3.2 forecast=3.4</code>
+<code>/fomc hawkish</code>
+
+💎 <b>Membership</b>
+Klik menu Upgrade di /start.
+"""
+    await update.message.reply_text(text, parse_mode="HTML")
 
 
 async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1108,7 +1507,10 @@ async def morning_briefing(context):
         if events:
             news_lines = ""
             for ev in events[:4]:
-                news_lines += f"• USD {ev['impact']} — {ev['raw'][:90]}\n"
+                raw_event = str(ev.get("raw", "-"))
+                wib_time = convert_ff_time_to_wib(raw_event)
+                clean_event = clean_ff_event_text(raw_event)
+                news_lines += f"• USD {ev.get('impact', 'NEWS')} — {wib_time} — {clean_event[:90]}\n"
 
         text = f"""
 🌅 <b>CAPITAL ELITE MORNING BRIEFING</b>
@@ -1235,7 +1637,10 @@ async def marketnews_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if events:
         news_lines = ""
         for ev in events[:5]:
-            news_lines += f"• USD {ev['impact']} — {ev['raw'][:90]}\n"
+            raw_event = str(ev.get("raw", "-"))
+            wib_time = convert_ff_time_to_wib(raw_event)
+            clean_event = clean_ff_event_text(raw_event)
+            news_lines += f"• USD {ev.get('impact', 'NEWS')} — {wib_time} — {clean_event[:90]}\n"
     else:
         news_lines = "• Tidak ada data high impact terbaca. Tetap cek kalender manual sebelum entry.\n"
     today = (datetime.utcnow() + timedelta(hours=7)).strftime("%d %b %Y")
@@ -1357,7 +1762,15 @@ async def auto_news_alert(context):
 """
 
         for key, ev in selected_events[:5]:
-            text += f"\n• <b>USD {ev.get('impact', 'NEWS')}</b>\n{str(ev.get('raw', '-'))[:160]}\n"
+            raw_event = str(ev.get("raw", "-"))
+            wib_time = convert_ff_time_to_wib(raw_event)
+            clean_event = clean_ff_event_text(raw_event)
+
+            text += f"""
+• <b>USD {ev.get('impact', 'NEWS')}</b>
+🕘 <b>{wib_time}</b>
+📌 {clean_event[:160]}
+"""
             sent_today.add(key)
 
         text += """
@@ -1368,9 +1781,9 @@ XAUUSD • BTCUSD • ETHUSD • USD Index
 Hindari entry besar menjelang news.
 Tunggu spread normal dan candle close setelah news.
 
-🕘 <b>Timezone Note</b>
-Jam news mengikuti timezone kalender Forex Factory.
-Set kalender ke Jakarta/WIB untuk waktu Indonesia.
+🕘 <b>Timezone</b>
+Jam rilis sudah dikonversi ke estimasi WIB.
+Tetap validasi kalender ekonomi sebelum news besar.
 
 🧠 <b>Elite Note</b>
 Jangan nebak news. Tunggu market kasih arah.
@@ -1452,6 +1865,12 @@ app.add_handler(CommandHandler("risk", risk_command))
 app.add_handler(CommandHandler("edukasi", edukasi_command))
 app.add_handler(CommandHandler("marketnews", marketnews_command))
 app.add_handler(CommandHandler("stats", stats_command))
+app.add_handler(CommandHandler("commands", commands_command))
+app.add_handler(CommandHandler("xau", xau_command))
+app.add_handler(CommandHandler("xag", xag_command))
+app.add_handler(CommandHandler("btc", btc_command))
+app.add_handler(CommandHandler("eth", eth_command))
+app.add_handler(CommandHandler("sniper", sniper_command))
 app.add_handler(CallbackQueryHandler(button))
 
 app.job_queue.run_repeating(
