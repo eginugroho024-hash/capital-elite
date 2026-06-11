@@ -1082,10 +1082,18 @@ async def auto_news_alert(context):
         url = f"https://financialmodelingprep.com/api/v3/economic_calendar?from={today}&to={today}&apikey={FMP_API_KEY}"
 
         response = requests.get(url, timeout=10)
-        data = response.json()
+                data = response.json()
+
+        if not isinstance(data, list):
+            print("NEWS API RESPONSE:", data)
+            return
+
         users = load_users()
 
         for event in data:
+            if not isinstance(event, dict):
+                continue
+
             event_name = str(event.get("event", "")).lower()
             country = str(event.get("country", "")).upper()
 
