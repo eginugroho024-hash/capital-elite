@@ -780,8 +780,9 @@ Better miss than MC. Tunggu setup lebih clean.
 📈 H1: <b>{h1_bias}</b> | M15: <b>{m15_bias}</b>
 📈 M5: <b>{m5_bias}</b>
 
-{mode}
-<i>{vibe}</i>
+🏆 Grade: <b>{grade}</b>
+🔥 Confidence: <b>{confidence}%</b>
+🧭 Bias: <b>{action_bias}</b>
 
 ⚠️ Tunggu candle konfirmasi sebelum entry.
 {disclaimer_footer()}
@@ -1070,7 +1071,20 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not user["premium"]:
                 hasil += f"\n\n🆓 Sisa trial market: {TRIAL_LIMIT_MARKET - user['market_used']} analisa"
         except Exception as e:
-            hasil = "Error ambil data market: " + str(e)
+            hasil = f"""
+👑 <b>CAPITAL ELITE PROJECT</b>
+
+📡 <b>Market Data Sync</b>
+Sistem sedang validasi data market terbaru.
+
+Detail:
+<code>{type(e).__name__}: {str(e)[:160]}</code>
+
+🔄 Coba klik ulang 30-60 detik lagi.
+
+⚠️ <b>Not Financial Advice</b>
+Trading memiliki risiko tinggi.
+"""
         keyboard = [[InlineKeyboardButton("🔁 Analisa Lagi", callback_data=f"pair_{pair_key}")], [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_start")]]
         await q.edit_message_text(hasil, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
@@ -1160,31 +1174,22 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             trial_note = f"\n\n🆓 Sisa trial market: {TRIAL_LIMIT_MARKET - user['market_used']} analisa"
 
         text = f"""
-🎯 <b>CAPITAL ELITE SNIPER SCANNER</b>
-<code>{PAIRS[pair_key]['name']} • Multi-Timeframe Confluence</code>
+🎯 <b>CAPITAL ELITE SNIPER PRO</b>
 
-{lines}
-📊 <b>Confluence</b>
-<b>{confluence}/4</b> timeframe searah
-
-🔥 <b>Average Confidence</b>
-<b>{avg_conf}%</b> {conf_bar(avg_conf)}
-
-🏆 <b>Grade</b>
-<b>{grade}</b>
-
-🧭 <b>Final Bias</b>
+💰 <b>{PAIRS[pair_key]['name']}</b> | <b>{grade}</b>
 {final_bias}
+📊 Score: <b>{avg_conf}/100</b> | Confluence <b>{confluence}/4</b>
 
-📌 <b>Action Plan</b>
-{action}
+{lines}📌 Action: {action}
 
-⚠️ <b>Elite Rule</b>
-Scanner ini bukan tombol all-in.
-Tetap tunggu candle valid dan jaga risk.
+⚠️ Tunggu candle konfirmasi.
 
+━━━━━━━━━━━━━━
 ⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
+Gunakan Stop Loss.
+Kelola risiko dan modal dengan bijak.
+━━━━━━━━━━━━━━
 {trial_note}
 """
         await q.edit_message_text(
@@ -1274,7 +1279,7 @@ Trial News: <b>{news_left}</b>
 <b>Rp 250.000</b>
 
 ♾️ <b>LIFETIME ACCESS</b>
-<b>Rp 500.000</b>
+<b>Rp 499.000</b>
 
 ✅ Premium Signal
 ✅ Auto Signal Broadcast
@@ -1475,31 +1480,22 @@ async def sniper_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         trial_note = f"\n\n🆓 Sisa trial market: {TRIAL_LIMIT_MARKET - user['market_used']} analisa"
 
     text = f"""
-🎯 <b>CAPITAL ELITE SNIPER SCANNER</b>
-<code>{PAIRS[pair_key]['name']} • Multi-Timeframe Confluence</code>
+🎯 <b>CAPITAL ELITE SNIPER PRO</b>
 
-{lines}
-📊 <b>Confluence</b>
-<b>{confluence}/4</b> timeframe searah
-
-🔥 <b>Average Confidence</b>
-<b>{avg_conf}%</b> {conf_bar(avg_conf)}
-
-🏆 <b>Grade</b>
-<b>{grade}</b>
-
-🧭 <b>Final Bias</b>
+💰 <b>{PAIRS[pair_key]['name']}</b> | <b>{grade}</b>
 {final_bias}
+📊 Score: <b>{avg_conf}/100</b> | Confluence <b>{confluence}/4</b>
 
-📌 <b>Action Plan</b>
-{action}
+{lines}📌 Action: {action}
 
-⚠️ <b>Elite Rule</b>
-Scanner ini bukan tombol all-in.
-Tetap tunggu candle valid dan jaga risk.
+⚠️ Tunggu candle konfirmasi.
 
+━━━━━━━━━━━━━━
 ⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
+Gunakan Stop Loss.
+Kelola risiko dan modal dengan bijak.
+━━━━━━━━━━━━━━
 {trial_note}
 """
     await update.message.reply_text(text, parse_mode="HTML")
