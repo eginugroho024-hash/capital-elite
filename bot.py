@@ -231,7 +231,7 @@ def get_market_analysis(pair_key, tf_key):
             "rsi": rsi, "rec": rec, "ema20": ema20, "ema50": ema50
         }
 
-      try:
+    try:
         tf_data = fetch_tf(tf_key)
         time.sleep(1.6)
 
@@ -245,16 +245,6 @@ def get_market_analysis(pair_key, tf_key):
 
     except Exception as e:
         return f"""
-👑 <b>CAPITAL ELITE PROJECT</b>
-
-⚠️ <b>DEBUG ERROR</b>
-
-Type:
-{type(e).__name__}
-
-Detail:
-{str(e)}
-"""
 👑 <b>CAPITAL ELITE PROJECT</b>
 
 ⚠️ <b>DEBUG ERROR</b>
@@ -1083,9 +1073,6 @@ Segala keputusan trading sepenuhnya menjadi tanggung jawab masing-masing penggun
             )
         except:
             pass
-async def auto_broadcast(context):
-    ...
-
 async def auto_news_alert(context):
     try:
         today = datetime.now().strftime("%Y-%m-%d")
