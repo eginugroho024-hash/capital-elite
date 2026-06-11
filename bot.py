@@ -734,7 +734,7 @@ Detail:
 
     if true_no_setup:
         return f"""
-👑 <b>CAPITAL ELITE INTELLIGENCE</b>
+👑 <b>CAPITAL ELITE PROJECT</b>
 <code>SMC Signal Desk</code>
 
 💱 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
@@ -1268,13 +1268,13 @@ Trial News: <b>{news_left}</b>
 ⚜ <b>MEMBERSHIP PLANS</b>
 
 💎 <b>ELITE ACCESS — 60 HARI</b>
-<s>Rp 499.000</s> 🔥 <b>Rp 299.000</b>
+<s>Rp 499.000</s> 🔥 <b>Rp 200000</b>
 
 👑 <b>VIP ACCESS — 90 HARI</b>
 <b>Rp 399.000</b>
 
 ♾️ <b>LIFETIME ACCESS</b>
-<b>Rp 1.999.000</b>
+<b>Rp 500000</b>
 
 ✅ Premium Signal
 ✅ Auto Signal Broadcast
