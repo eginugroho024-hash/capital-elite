@@ -231,7 +231,7 @@ def get_market_analysis(pair_key, tf_key):
             "rsi": rsi, "rec": rec, "ema20": ema20, "ema50": ema50
         }
 
-    try:
+        try:
         tf_data = fetch_tf(tf_key)
         time.sleep(1.6)
         h1 = fetch_tf("H1") if tf_key != "H1" else tf_data
@@ -239,7 +239,7 @@ def get_market_analysis(pair_key, tf_key):
         m15 = fetch_tf("M15") if tf_key != "M15" else tf_data
         time.sleep(1.6)
         m5 = fetch_tf("M5") if tf_key != "M5" else tf_data
-        except Exception as e:
+    except Exception as e:
         return f"""
 👑 <b>CAPITAL ELITE PROJECT</b>
 
