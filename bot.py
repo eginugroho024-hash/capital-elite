@@ -17,6 +17,8 @@ TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 ADMIN_ID = 7889334774  # ganti kalau ID admin lu beda
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
 USER_FILE = "users.json"
+NEWS_SENT_FILE = "news_sent.json"
+SIGNAL_LOG_FILE = "signal_log.json"
 TRIAL_LIMIT_MARKET = 5
 TRIAL_LIMIT_NEWS = 3
 
@@ -69,6 +71,38 @@ def save_users(users):
     with open(USER_FILE, "w", encoding="utf-8") as f:
         json.dump(users, f, indent=4)
 
+def load_json_file(path, default):
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def save_json_file(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+
+def get_news_key(raw_text):
+    raw_text = str(raw_text)
+    compact = re.sub(r"\s+", " ", raw_text).strip().lower()
+    return compact[:180]
+
+
+def log_signal(asset, tf, result_text):
+    logs = load_json_file(SIGNAL_LOG_FILE, [])
+    logs.append({
+        "asset": asset,
+        "tf": tf,
+        "time": wib_now().strftime("%Y-%m-%d %H:%M:%S"),
+        "preview": re.sub(r"<[^>]+>", "", result_text)[:250]
+    })
+    logs = logs[-100:]
+    save_json_file(SIGNAL_LOG_FILE, logs)
+
 
 def get_user(user_id):
     users = load_users()
@@ -79,6 +113,7 @@ def get_user(user_id):
             "market_used": 0,
             "news_used": 0,
             "premium": False,
+            "premium_until": None,
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         save_users(users)
@@ -86,7 +121,20 @@ def get_user(user_id):
     # Admin otomatis premium
     if int(uid) == ADMIN_ID:
         users[uid]["premium"] = True
+        users[uid]["premium_until"] = "LIFETIME"
         save_users(users)
+        return users[uid]
+
+    # Auto-expire premium membership
+    if users[uid].get("premium") and users[uid].get("premium_until") not in [None, "LIFETIME"]:
+        try:
+            expire_dt = datetime.strptime(users[uid]["premium_until"], "%Y-%m-%d %H:%M:%S")
+            if datetime.now() > expire_dt:
+                users[uid]["premium"] = False
+                users[uid]["expired_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                save_users(users)
+        except Exception:
+            pass
 
     return users[uid]
 
@@ -135,24 +183,6 @@ def conf_bar(conf):
     return "█" * full + "░" * (10 - full)
 
 
-def setup_grade(confidence, score_gap):
-    if confidence >= 90 and score_gap >= 25:
-        return "A+", "👑 ELITE SETUP", "LOW"
-    if confidence >= 80:
-        return "A", "🔥 SNIPER SETUP", "LOW-MEDIUM"
-    if confidence >= 65:
-        return "B", "🟡 VALID SETUP", "MEDIUM"
-    return "C", "⚪ WAIT SETUP", "HIGH"
-
-
-def premium_session_note(session_tag):
-    if session_tag == "Asia":
-        return "Asia session biasanya lebih lambat. Utamakan sniper entry dan jangan overlot."
-    if session_tag == "London":
-        return "London session mulai aktif. Waspada fake move dan liquidity sweep."
-    return "New York session volatil. Fokus eksekusi cepat dan risk ketat."
-
-
 def clean_num(value):
     if value is None:
         return None
@@ -164,6 +194,27 @@ def clean_num(value):
         return float(m.group(0))
     except Exception:
         return None
+
+
+def wib_now():
+    return datetime.utcnow() + timedelta(hours=7)
+
+
+def is_trade_signal_text(text):
+    bad_words = ["DEBUG ERROR", "NO SETUP", "Market Engine", "ERROR"]
+    return all(b not in text for b in bad_words)
+
+
+def premium_users(users):
+    result = []
+    for uid, data in users.items():
+        try:
+            u = get_user(int(uid))
+            if u.get("premium"):
+                result.append(uid)
+        except Exception:
+            pass
+    return result
 
 
 def dynamic_sl_tp(pair_key, signal, entry, high, low):
@@ -194,15 +245,12 @@ def dynamic_sl_tp(pair_key, signal, entry, high, low):
 # ==============================
 def get_market_analysis(pair_key, tf_key):
     pair = PAIRS[pair_key]
-
     tf_key = str(tf_key).upper().strip()
-
     if tf_key not in TIMEFRAMES:
         tf_key = "M5"
 
     def fetch_tf(tf):
         tv_interval = TIMEFRAMES.get(tf, "5m")
-
         handler = TA_Handler(
             symbol=pair["symbol"],
             screener=pair["screener"],
@@ -223,7 +271,7 @@ def get_market_analysis(pair_key, tf_key):
         rec = summ.get("RECOMMENDATION", "NEUTRAL")
 
         if price is None or high is None or low is None:
-            raise Exception("Data market belum lengkap.")
+            raise Exception("Data market belum lengkap dari provider.")
 
         price = float(price)
         open_price = float(open_price) if open_price else price
@@ -251,26 +299,25 @@ def get_market_analysis(pair_key, tf_key):
 
     try:
         tf_data = fetch_tf(tf_key)
-        pytime.sleep(1.6)
-
+        pytime.sleep(1.2)
         h1 = fetch_tf("H1") if tf_key != "H1" else tf_data
-        pytime.sleep(1.6)
-
+        pytime.sleep(1.2)
         m15 = fetch_tf("M15") if tf_key != "M15" else tf_data
-        pytime.sleep(1.6)
-
+        pytime.sleep(1.2)
         m5 = fetch_tf("M5") if tf_key != "M5" else tf_data
-
     except Exception as e:
-        print("MARKET ENGINE ERROR:", type(e).__name__, str(e))
-        return """
-⚜ <b>CAPITAL ELITE INTELLIGENCE</b>
+        return f"""
+👑 <b>CAPITAL ELITE PROJECT</b>
+<code>Market Intelligence System</code>
 
 📡 <b>Market Data Sync</b>
 Sistem sedang validasi data market terbaru.
-Coba ulang 30-60 detik lagi.
 
-<i>Quality over speed. Ini bukan error bot, data provider sedang membatasi request.</i>
+Detail:
+<code>{type(e).__name__}: {str(e)[:180]}</code>
+
+🔄 Coba klik ulang 30-60 detik lagi.
+⚠️ Not Financial Advice
 """
 
     price = tf_data["price"]
@@ -279,24 +326,21 @@ Coba ulang 30-60 detik lagi.
     m15_bias = m15["bias"]
     m5_bias = m5["bias"]
 
-    # Session WIB
     wib_now = datetime.utcnow() + timedelta(hours=7)
     hour = wib_now.hour
     if 5 <= hour < 14:
-        session_tag = "Asia"
+        session_tag = "Asia Session"
         session_score = 4
+        session_note = "Volatilitas biasanya lebih kalem. Utamakan sniper/retest."
     elif 14 <= hour < 20:
-        session_tag = "London"
+        session_tag = "London Session"
         session_score = 10
+        session_note = "Volume mulai naik. Setup valid lebih enak dieksekusi."
     else:
-        session_tag = "New York"
+        session_tag = "New York Session"
         session_score = 10
+        session_note = "Volatilitas tinggi. Wajib jaga lot dan disiplin SL."
 
-    # ==============================
-    # SMC PROXY ENGINE
-    # ==============================
-    # Karena tradingview_ta tidak memberi candle history penuh, engine ini pakai proxy:
-    # HTF bias, premium/discount, liquidity sweep range, dan trigger M5.
     htf_bull = h1_bias == "BULLISH"
     htf_bear = h1_bias == "BEARISH"
     setup_bull = m15_bias in ["BULLISH", "SIDEWAYS"]
@@ -309,7 +353,6 @@ Coba ulang 30-60 detik lagi.
     bullish_mss = (m5["candle"] == "BULLISH") or (price > m5["ema20"])
     bearish_mss = (m5["candle"] == "BEARISH") or (price < m5["ema20"])
 
-    # Tentukan arah terbaik: tidak harus sempurna, agar bot tetap kasih area.
     buy_score = 0
     sell_score = 0
     if htf_bull: buy_score += 28
@@ -326,14 +369,27 @@ Coba ulang 30-60 detik lagi.
     sell_score += session_score
 
     signal = "BUY" if buy_score >= sell_score else "SELL"
-    confidence = min(max(buy_score if signal == "BUY" else sell_score, 45), 96)
-
-    # V2 rule: bot jangan kebanyakan NO SETUP.
-    # 80+  = Execute small
-    # 60-79 = Retest entry tetap keluar area
-    # <60  = baru NO SETUP
+    raw_score = buy_score if signal == "BUY" else sell_score
+    confidence = min(max(raw_score, 45), 96)
     score_gap = abs(buy_score - sell_score)
-    true_no_setup = confidence < 60
+    true_no_setup = confidence < 60 or score_gap < 8
+
+    if confidence >= 88:
+        grade = "A+"
+        setup_type = "💎 INSTITUTIONAL SETUP"
+        risk_level = "LOW"
+    elif confidence >= 78:
+        grade = "A"
+        setup_type = "🚀 SNIPER SETUP"
+        risk_level = "MEDIUM"
+    elif confidence >= 65:
+        grade = "B"
+        setup_type = "🟡 RETEST SETUP"
+        risk_level = "MEDIUM-HIGH"
+    else:
+        grade = "C"
+        setup_type = "⚪ WAIT / NO SETUP"
+        risk_level = "HIGH"
 
     if pair_key == "XAUUSD":
         sl_dist = max(3.0, min(market_range * 0.85, 6.0))
@@ -344,7 +400,6 @@ Coba ulang 30-60 detik lagi.
     else:
         sl_dist = max(10, min(market_range * 0.85, 40))
 
-    # Entry logic: aggressive = anti ketinggalan moment, sniper = minim floating.
     if signal == "BUY":
         aggressive_low = price - (sl_dist * 0.15)
         aggressive_high = price + (sl_dist * 0.08)
@@ -354,12 +409,12 @@ Coba ulang 30-60 detik lagi.
         tp1 = price + (sl_dist * 1.1)
         tp2 = price + (sl_dist * 2.0)
         tp3 = price + (sl_dist * 3.0)
-        signal_label = "🟢 BUY SETUP"
+        signal_label = "🟢 BUY PLAN"
+        action_bias = "BUY ONLY"
         poi_label = "Discount POI"
-        sweep_label = "Sell-side sweep"
-        mss_label = "Bullish trigger"
-        htf_text = "H1 bullish bias" if htf_bull else "H1 belum full bullish"
-        invalid_text = "Invalid kalau low POI jebol kuat."
+        sweep_label = "Sell-side liquidity sweep"
+        mss_label = "Bullish trigger / recovery"
+        invalid_text = "Invalid kalau low POI jebol kuat dan candle close bearish."
     else:
         aggressive_low = price - (sl_dist * 0.08)
         aggressive_high = price + (sl_dist * 0.15)
@@ -369,61 +424,40 @@ Coba ulang 30-60 detik lagi.
         tp1 = price - (sl_dist * 1.1)
         tp2 = price - (sl_dist * 2.0)
         tp3 = price - (sl_dist * 3.0)
-        signal_label = "🔴 SELL SETUP"
+        signal_label = "🔴 SELL PLAN"
+        action_bias = "SELL ONLY"
         poi_label = "Premium POI"
-        sweep_label = "Buy-side sweep"
-        mss_label = "Bearish trigger"
-        htf_text = "H1 bearish bias" if htf_bear else "H1 belum full bearish"
-        invalid_text = "Invalid kalau high POI jebol kuat."
+        sweep_label = "Buy-side liquidity sweep"
+        mss_label = "Bearish trigger / rejection"
+        invalid_text = "Invalid kalau high POI jebol kuat dan candle close bullish."
 
     confidence_bar = conf_bar(confidence)
     entry_mid = (aggressive_low + aggressive_high) / 2
     rr = round(abs(tp2 - entry_mid) / max(abs(entry_mid - sl), 0.0001), 1)
-    grade, grade_label, risk_level = setup_grade(confidence, score_gap)
-    confluence = 0
-    confluence += 1 if h1_bias == signal.replace("BUY", "BULLISH").replace("SELL", "BEARISH") else 0
-    confluence += 1 if m15_bias in [signal.replace("BUY", "BULLISH").replace("SELL", "BEARISH"), "SIDEWAYS"] else 0
-    confluence += 1 if m5_bias == signal.replace("BUY", "BULLISH").replace("SELL", "BEARISH") else 0
-    session_note = premium_session_note(session_tag)
-
-    if confidence >= 80:
-        mode = "🚀 <b>EXECUTE SMALL</b>"
-        vibe = "Setup cakep. Masuk kecil boleh, add pas retest."
-    elif confidence >= 65:
-        mode = "🟡 <b>RETEST ENTRY</b>"
-        vibe = "Setup ada, jangan cuma nunggu doang. Pakai Sniper buat minim floating."
-    else:
-        mode = "⚪ <b>NO SETUP</b>"
-        vibe = "Market belum worth it. Simpan peluru."
 
     if true_no_setup:
         return f"""
-⚜ <b>CAPITAL ELITE INTELLIGENCE</b>
-<code>SMC Market Engine</code>
+👑 <b>CAPITAL ELITE INTELLIGENCE</b>
+<code>SMC Signal Desk</code>
 
 💱 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
 ⚪ <b>NO TRADE ZONE</b>
 
-📊 <b>Setup Score</b>
-Confidence: <b>{confidence}%</b>
-Grade: <b>{grade}</b> • Risk: <b>{risk_level}</b>
+📊 <b>Market Status</b>
+H1: <b>{h1_bias}</b>
+M15: <b>{m15_bias}</b>
+M5: <b>{m5_bias}</b>
+
+⭐ <b>Setup Grade</b>: <b>{grade}</b>
+🔥 <b>Confidence</b>: <b>{confidence}%</b>
 {confidence_bar}
+⚠️ <b>Risk Level</b>: <b>{risk_level}</b>
 
-🧭 <b>Multi-Timeframe Read</b>
-H1  : <b>{h1_bias}</b>
-M15 : <b>{m15_bias}</b>
-M5  : <b>{m5_bias}</b>
-Confluence: <b>{confluence}/3</b>
-
-🧠 <b>Elite Notes</b>
-• HTF belum clean
-• Momentum dua arah masih tarik-tarikan
-• Belum ada edge yang enak buat akun kecil
-• {session_note}
+🧠 <b>Elite Note</b>
+Market belum kasih edge bersih. Jangan maksa entry kalau confluence belum kuat.
 
 🛡️ <b>Small Account Rule</b>
-Jangan maksa entry kalau RR belum jelas.
-Better miss than MC.
+Better miss than MC. Tunggu setup lebih clean.
 
 ⚠️ <b>DISCLAIMER</b>
 Bukan saran finansial.
@@ -431,52 +465,48 @@ Trading mengandung risiko — kelola modal dengan bijak.
 """
 
     return f"""
-⚜ <b>CAPITAL ELITE INTELLIGENCE</b>
-<code>Premium SMC Signal Desk</code>
+👑 <b>CAPITAL ELITE INTELLIGENCE</b>
+<code>SMC Signal Desk • Premium Mode</code>
 
 💱 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
-{grade_label}
+{setup_type}
 <b>{signal_label}</b>
 
-📊 <b>Market Score</b>
-Confidence: <b>{confidence}%</b>
-Grade: <b>{grade}</b> • Risk: <b>{risk_level}</b>
-Confluence: <b>{confluence}/3</b>
-{confidence_bar}
-
-🧭 <b>Multi-Timeframe Bias</b>
-H1  : <b>{h1_bias}</b>
-M15 : <b>{m15_bias}</b>
-M5  : <b>{m5_bias}</b>
+📌 <b>Market Bias</b>
+H1: <b>{h1_bias}</b>
+M15: <b>{m15_bias}</b>
+M5: <b>{m5_bias}</b>
+Action: <b>{action_bias}</b>
 
 ⚡ <b>Aggressive Entry</b>
 <code>{fmt(aggressive_low)} - {fmt(aggressive_high)}</code>
 
-💎 <b>Sniper Entry Zone</b>
+💎 <b>Sniper Zone</b>
 <code>{fmt(sniper_low)} - {fmt(sniper_high)}</code>
 
 🛑 <b>Stop Loss</b>
 <code>{fmt(sl)}</code>
 
-🎯 <b>Take Profit Area</b>
+🎯 <b>Take Profit</b>
 TP1: <code>{fmt(tp1)}</code>
 TP2: <code>{fmt(tp2)}</code>
 TP3: <code>{fmt(tp3)}</code>
-RR: <b>1:{rr}</b>
 
-🧠 <b>Elite Reasoning</b>
-• {htf_text}
+📊 <b>Elite Score</b>
+Grade: <b>{grade}</b>
+Confidence: <b>{confidence}%</b>
+{confidence_bar}
+Risk: <b>{risk_level}</b>
+RR Target: <b>1:{rr}</b>
+
+🧠 <b>Confluence</b>
 • {poi_label}
 • {sweep_label}
 • {mss_label}
 • {session_note}
 
-{mode}
-<i>{vibe}</i>
-
-🛡️ <b>Execution Rule</b>
-Entry kecil dulu. Add cuma kalau retest valid.
-Pindahkan SL ke BE setelah TP1 jika market clean.
+🛡️ <b>Trade Management</b>
+Entry kecil dulu. Setelah TP1, amankan posisi / geser SL ke BE.
 {invalid_text}
 
 ⚠️ <b>DISCLAIMER</b>
@@ -680,24 +710,24 @@ def main_menu(user_id):
 
     text = f"""
 👑 <b>CAPITAL ELITE PROJECT</b>
-<code>Signal Analisis Market</code>
+<code>AI-Powered Trading Intelligence System</code>
 
 {status_line}
 {access_line}
 
-📊 <b>Market Intelligence</b>
-MTF Bias • Sniper Zone • SL • TP1/TP2/TP3
+📊 <b>Market Scan</b>
+Aggressive • Sniper • SL • TP
 
 🧠 <b>SMC Engine</b>
-HTF Bias • Liquidity • POI • MSS • Confidence Score
+HTF Bias • Liquidity • POI • MSS
 
-📰 <b>News Intelligence</b>
-CPI • NFP • FOMC • PMI • No Trade Zone
+📰 <b>News Desk</b>
+CPI • NFP • FOMC • PMI
 
-🟢 <b>Elite Engine Online</b>
-Pilih menu di bawah.
+🟢 <b>Engine Online</b>
+Pilih fitur di bawah dan ikuti setup dengan disiplin.
 
-Link group ada di bio
+<code>Trade Smart • Trade Elite</code>
 """
 
     keyboard = [
@@ -836,28 +866,37 @@ Trial News: <b>{news_left}</b>
     elif data == "upgrade":
         text = f"""
 👑 <b>CAPITAL ELITE PROJECT</b>
+<code>Trading Intelligence System</code>
 
-💎 <b>ELITE ACCESS</b>
-Bot signal SMC buat bantu cari area entry yang lebih presisi.
+⚜ <b>MEMBERSHIP PLANS</b>
 
-📊 Aggressive Entry
-💎 Sniper Entry
-🛑 Structure SL
-🎯 TP Area
-📰 News Impact
-🧠 Edukasi Harian
-
-💰 <b>Lifetime Access</b>
+💎 <b>ELITE ACCESS — 60 HARI</b>
 <s>Rp 499.000</s> 🔥 <b>Rp 299.000</b>
+
+👑 <b>VIP ACCESS — 90 HARI</b>
+<b>Rp 399.000</b>
+
+♾️ <b>LIFETIME ACCESS</b>
+<b>Rp 1.999.000</b>
+
+✅ Premium Signal
+✅ Auto Signal Broadcast
+✅ Morning Briefing WIB
+✅ High Impact News Alert
+✅ Risk Calculator
+✅ Elite Mindset Broadcast
+✅ Admin Support
 
 💳 <b>Payment</b>
 <code>{PAYMENT_TEXT}</code>
-Mau Akses Bot Gratis ?
-Hubungi Admin S&K Berlaku
+
+🎁 <b>Mau akses gratis?</b>
+Hubungi Admin — S&K berlaku.
+
 📩 <b>Admin</b>
 {ADMIN_CONTACT}
 
-⚡ Setelah bayar, kirim bukti. Akses langsung diaktifin.
+⚡ Setelah bayar, kirim bukti transfer.
 """
         await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="back_start")]]), parse_mode="HTML")
 
@@ -909,16 +948,35 @@ async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Lu bukan admin.")
         return
     if len(context.args) < 1:
-        await update.message.reply_text("Format: /premium ID_TELEGRAM")
+        await update.message.reply_text("Format: /premium ID_TELEGRAM\nContoh: /premium 123456789\n\nDefault premium: 60 hari\nCustom: /premium 123456789 90")
         return
+
     target_id = context.args[0]
+    days = 60
+    if len(context.args) >= 2:
+        try:
+            days = int(context.args[1])
+        except Exception:
+            days = 60
+
+    until = datetime.now() + timedelta(days=days)
     users = load_users()
     if target_id not in users:
-        users[target_id] = {"market_used": 0, "news_used": 0, "premium": True, "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        users[target_id] = {
+            "market_used": 0,
+            "news_used": 0,
+            "premium": True,
+            "premium_until": until.strftime("%Y-%m-%d %H:%M:%S"),
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
     else:
         users[target_id]["premium"] = True
+        users[target_id]["premium_until"] = until.strftime("%Y-%m-%d %H:%M:%S")
     save_users(users)
-    await update.message.reply_text(f"User {target_id} sudah PREMIUM.")
+
+    await update.message.reply_text(
+        f"👑 CAPITAL ELITE PROJECT\n\nUser {target_id} sudah PREMIUM selama {days} hari.\nExpired: {until.strftime('%d-%m-%Y %H:%M')}"
+    )
 
 
 async def unpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -950,6 +1008,134 @@ async def cekuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     u = users[uid]
     await update.message.reply_text(f"ID: {uid}\nPremium: {u.get('premium')}\nMarket used: {u.get('market_used')}\nNews used: {u.get('news_used')}")
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("Lu bukan admin.")
+        return
+
+    users = load_users()
+    total = len(users)
+    premium_count = 0
+    trial_count = 0
+    expired_count = 0
+
+    for uid in list(users.keys()):
+        u = get_user(int(uid))
+        if u.get("premium"):
+            premium_count += 1
+        else:
+            trial_count += 1
+            if u.get("expired_at"):
+                expired_count += 1
+
+    logs = load_json_file(SIGNAL_LOG_FILE, [])
+    news_sent = load_json_file(NEWS_SENT_FILE, {})
+    today_key = wib_now().strftime("%Y-%m-%d")
+    news_today = len(news_sent.get(today_key, []))
+
+    text = f"""
+👑 <b>CAPITAL ELITE ADMIN DASHBOARD</b>
+
+👥 Total User: <b>{total}</b>
+💎 Premium Aktif: <b>{premium_count}</b>
+🆓 Trial/Free: <b>{trial_count}</b>
+⌛ Expired: <b>{expired_count}</b>
+
+🚨 Signal Log: <b>{len(logs)}</b>
+📰 News Sent Today: <b>{news_today}</b>
+
+📊 Market Trial Limit: <b>{TRIAL_LIMIT_MARKET}</b>
+📰 News Trial Limit: <b>{TRIAL_LIMIT_NEWS}</b>
+
+⚙️ Engine: <b>ONLINE</b>
+🕘 Server Mode: <b>WIB Schedule</b>
+"""
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def auto_signal_broadcast(context):
+    try:
+        users = load_users()
+        targets = premium_users(users)
+        if not targets:
+            print("AUTO SIGNAL: tidak ada premium user")
+            return
+
+        signal_text = get_market_analysis("XAUUSD", "M15")
+        if not is_trade_signal_text(signal_text):
+            print("AUTO SIGNAL: no setup / error, tidak dibroadcast")
+            return
+
+        log_signal("XAUUSD", "M15", signal_text)
+
+        header = """
+🚨 <b>CAPITAL ELITE AUTO SIGNAL</b>
+<code>XAUUSD Priority Alert • Auto Broadcast</code>
+
+"""
+        text = header + signal_text + """
+
+📌 <b>Auto Signal Note</b>
+Signal otomatis hanya dikirim saat engine membaca setup yang layak dipantau.
+Gunakan lot kecil dan tetap validasi chart sebelum entry.
+"""
+        for uid in targets:
+            try:
+                await context.bot.send_message(chat_id=int(uid), text=text, parse_mode="HTML")
+            except Exception:
+                pass
+
+    except Exception as e:
+        print("AUTO SIGNAL ERROR:", e)
+
+
+async def morning_briefing(context):
+    try:
+        users = load_users()
+        targets = premium_users(users)
+        if not targets:
+            print("MORNING BRIEFING: tidak ada premium user")
+            return
+
+        today = wib_now().strftime("%d %b %Y")
+        xau = get_market_analysis("XAUUSD", "H1")
+        btc = get_market_analysis("BTCUSD", "H1")
+        events = parse_forex_factory_today()
+
+        news_lines = "Tidak ada high impact USD yang terbaca. Tetap cek kalender manual."
+        if events:
+            news_lines = ""
+            for ev in events[:4]:
+                news_lines += f"• USD {ev['impact']} — {ev['raw'][:90]}\n"
+
+        text = f"""
+🌅 <b>CAPITAL ELITE MORNING BRIEFING</b>
+<code>{today} • WIB Session Plan</code>
+
+🥇 <b>XAUUSD Focus</b>
+Lihat bias H1 dan tunggu validasi M15/M5 sebelum entry.
+
+₿ <b>BTCUSD Focus</b>
+Pantau risk sentiment dan reaksi terhadap USD news.
+
+📰 <b>News Watch</b>
+{news_lines}
+🛡️ <b>Elite Rule</b>
+Jangan overlot di awal hari. Tunggu setup, bukan kejar market.
+
+⚠️ Not Financial Advice
+Trading memiliki risiko tinggi.
+"""
+        for uid in targets:
+            try:
+                await context.bot.send_message(chat_id=int(uid), text=text, parse_mode="HTML")
+            except Exception:
+                pass
+
+    except Exception as e:
+        print("MORNING BRIEFING ERROR:", e)
 
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1081,7 +1267,7 @@ import random
 
 async def auto_broadcast(context):
     pesan = random.choice([
-        """📢 Mau Akses Bot Analisa Trading Gratis?
+        """📢 Mau Akses Bot Analisa Trading?
 
 ✅ Analisa Market Harian
 ✅ Area Entry Potensial
@@ -1127,53 +1313,127 @@ Segala keputusan trading sepenuhnya menjadi tanggung jawab masing-masing penggun
             pass
 async def auto_news_alert(context):
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
-        url = f"https://financialmodelingprep.com/api/v3/economic_calendar?from={today}&to={today}&apikey={FMP_API_KEY}"
+        events = parse_forex_factory_today()
 
-        response = requests.get(url, timeout=10)
-        data = response.json()
+        if not events:
+            print("FOREX FACTORY: Tidak ada news USD penting / gagal dibaca")
+            return
+
         users = load_users()
+        targets = list(users.keys())
+        today = wib_now().strftime("%d %b %Y")
+        sent_db = load_json_file(NEWS_SENT_FILE, {})
+        today_key = wib_now().strftime("%Y-%m-%d")
+        sent_today = set(sent_db.get(today_key, []))
 
-        for event in data:
-            event_name = str(event.get("event", "")).lower()
-            country = str(event.get("country", "")).upper()
+        selected_events = []
+        important_terms = [
+            "cpi", "core cpi", "consumer price index", "nfp", "non-farm", "nonfarm",
+            "fomc", "federal funds rate", "interest rate", "powell", "pce", "core pce",
+            "ppi", "unemployment", "average hourly earnings", "pmi", "ism", "gdp"
+        ]
 
-            if country == "USD" and (
-                "cpi" in event_name or
-                "consumer price index" in event_name or
-                "core cpi" in event_name or
-                "nfp" in event_name or
-                "fomc" in event_name
-            ):
-                text = f"""
-📰 CAPITAL ELITE NEWS ALERT
+        for ev in events:
+            raw = str(ev.get("raw", ""))
+            raw_l = raw.lower()
+            if not any(k in raw_l for k in important_terms):
+                continue
+            key = get_news_key(raw)
+            if key in sent_today:
+                continue
+            selected_events.append((key, ev))
 
-🔥 High Impact News Detected
+        if not selected_events:
+            print("FOREX FACTORY: news penting sudah pernah dikirim hari ini")
+            return
 
-Event:
-{event.get('event')}
+        text = f"""
+📰 <b>CAPITAL ELITE NEWS INTELLIGENCE</b>
+<code>{today} • High Impact USD Watch</code>
 
-Country:
-{country}
+🔥 <b>HIGH IMPACT NEWS DETECTED</b>
 
-Date:
-{event.get('date')}
+📊 <b>USD News Watch</b>
+"""
 
-⚠️ Hindari entry besar menjelang news.
-Tunggu market kasih arah yang jelas.
+        for key, ev in selected_events[:5]:
+            text += f"\n• <b>USD {ev.get('impact', 'NEWS')}</b>\n{str(ev.get('raw', '-'))[:160]}\n"
+            sent_today.add(key)
+
+        text += """
+⚠️ <b>Market Focus</b>
+XAUUSD • BTCUSD • ETHUSD • USD Index
+
+🚫 <b>No Trade Zone</b>
+Hindari entry besar menjelang news.
+Tunggu spread normal dan candle close setelah news.
+
+🕘 <b>Timezone Note</b>
+Jam news mengikuti timezone kalender Forex Factory.
+Set kalender ke Jakarta/WIB untuk waktu Indonesia.
+
+🧠 <b>Elite Note</b>
+Jangan nebak news. Tunggu market kasih arah.
 
 ⚠️ Not Financial Advice
 Trading memiliki risiko tinggi.
 """
 
-                for uid in users.keys():
-                    try:
-                        await context.bot.send_message(chat_id=int(uid), text=text)
-                    except:
-                        pass
+        sent_db[today_key] = list(sent_today)
+        # keep only latest 7 days
+        sorted_days = sorted(sent_db.keys())[-7:]
+        sent_db = {d: sent_db[d] for d in sorted_days}
+        save_json_file(NEWS_SENT_FILE, sent_db)
+
+        for uid in targets:
+            try:
+                await context.bot.send_message(
+                    chat_id=int(uid),
+                    text=text,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
 
     except Exception as e:
-        print("NEWS ERROR:", e)
+        print("FOREX FACTORY NEWS ERROR:", e)
+
+
+async def new_york_session_alert(context):
+    try:
+        users = load_users()
+        targets = premium_users(users)
+        if not targets:
+            print("NY SESSION: tidak ada premium user")
+            return
+
+        text = """
+🔥 <b>CAPITAL ELITE NEW YORK SESSION</b>
+<code>19:00 WIB • XAUUSD Volatility Watch</code>
+
+🇺🇸 <b>New York Session mulai aktif</b>
+
+Pantau:
+✅ Liquidity sweep
+✅ Reaksi area H1/M15
+✅ Spread & news USD
+✅ Jangan overlot di candle impulsif
+
+📌 <b>Elite Rule</b>
+Kalau market sudah terbang duluan, jangan dikejar.
+Tunggu retrace atau setup baru.
+
+⚠️ Not Financial Advice
+Trading memiliki risiko tinggi.
+"""
+        for uid in targets:
+            try:
+                await context.bot.send_message(chat_id=int(uid), text=text, parse_mode="HTML")
+            except Exception:
+                pass
+
+    except Exception as e:
+        print("NY SESSION ERROR:", e)
 
 # ===========================
 # RUN APP
@@ -1191,6 +1451,7 @@ app.add_handler(CommandHandler("broadcast", broadcast))
 app.add_handler(CommandHandler("risk", risk_command))
 app.add_handler(CommandHandler("edukasi", edukasi_command))
 app.add_handler(CommandHandler("marketnews", marketnews_command))
+app.add_handler(CommandHandler("stats", stats_command))
 app.add_handler(CallbackQueryHandler(button))
 
 app.job_queue.run_repeating(
@@ -1199,11 +1460,32 @@ app.job_queue.run_repeating(
     first=300
 )
 
+# Cek news otomatis tiap 30 menit
+app.job_queue.run_repeating(
+    auto_news_alert,
+    interval=1800,
+    first=60
+)
+
+# Auto signal XAUUSD untuk premium setiap 3 jam
+app.job_queue.run_repeating(
+    auto_signal_broadcast,
+    interval=10800,
+    first=900
+)
+
 from datetime import time as dt_time
 
+# Morning briefing 07:00 WIB = 00:00 UTC
 app.job_queue.run_daily(
-    auto_news_alert,
-    time=dt_time(hour=0, minute=30)
+    morning_briefing,
+    time=dt_time(hour=0, minute=0)
+)
+
+# New York session alert 19:00 WIB = 12:00 UTC
+app.job_queue.run_daily(
+    new_york_session_alert,
+    time=dt_time(hour=12, minute=0)
 )
 
 print("CAPITAL ELITE PROJECT BOT ONLINE...")
