@@ -239,15 +239,17 @@ def get_market_analysis(pair_key, tf_key):
         m15 = fetch_tf("M15") if tf_key != "M15" else tf_data
         time.sleep(1.6)
         m5 = fetch_tf("M5") if tf_key != "M5" else tf_data
-    except Exception:
-        return """
+        except Exception as e:
+        return f"""
 👑 <b>CAPITAL ELITE PROJECT</b>
 
-⚠️ <b>Market Engine Lagi Padat</b>
-Server data market kena limit.
-Coba klik lagi 30-60 detik lagi ya.
+⚠️ <b>DEBUG ERROR</b>
 
-<i>Tenang, ini bukan error bot. Data provider lagi ngerem request.</i>
+Type:
+{type(e).__name__}
+
+Detail:
+{str(e)}
 """
 
     price = tf_data["price"]
