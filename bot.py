@@ -1150,13 +1150,11 @@ app.job_queue.run_repeating(
     first=300
 )
 
-from datetime import time as dt_time
-
-app.job_queue.run_daily(
+app.job_queue.run_repeating(
     auto_news_alert,
-    time=dt_time(hour=0, minute=30)
+    interval=1800,
+    first=60
 )
-
 print("CAPITAL ELITE PROJECT BOT ONLINE...")
 app.run_polling()
 
