@@ -399,7 +399,7 @@ Trading mengandung risiko — kelola modal dengan bijak.
 
     return f"""
 👑 <b>CAPITAL ELITE PROJECT V2</b>
-<code>Gen Z SMC Signal Desk</code>
+<code>SMC Signal Desk</code>
 
 💱 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
 <b>{signal_label}</b>
@@ -631,7 +631,7 @@ def main_menu(user_id):
 
     text = f"""
 👑 <b>CAPITAL ELITE PROJECT</b>
-<code>SMC Signal Bot for Small Account</code>
+<code>SMC Signal Bot Dan Analisa</code>
 
 {status_line}
 {access_line}
@@ -645,8 +645,9 @@ HTF Bias • Liquidity • POI • MSS
 📰 <b>News Desk</b>
 CPI • NFP • FOMC • PMI
 
-🟢 <b>AI Engine Online</b>
-Gas pilih menu di bawah.
+🟢 <b>Engine Online</b>
+Gas pilih menu di bawah
+link group ada di bio.
 """
 
     keyboard = [
