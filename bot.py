@@ -135,6 +135,24 @@ def conf_bar(conf):
     return "█" * full + "░" * (10 - full)
 
 
+def setup_grade(confidence, score_gap):
+    if confidence >= 90 and score_gap >= 25:
+        return "A+", "👑 ELITE SETUP", "LOW"
+    if confidence >= 80:
+        return "A", "🔥 SNIPER SETUP", "LOW-MEDIUM"
+    if confidence >= 65:
+        return "B", "🟡 VALID SETUP", "MEDIUM"
+    return "C", "⚪ WAIT SETUP", "HIGH"
+
+
+def premium_session_note(session_tag):
+    if session_tag == "Asia":
+        return "Asia session biasanya lebih lambat. Utamakan sniper entry dan jangan overlot."
+    if session_tag == "London":
+        return "London session mulai aktif. Waspada fake move dan liquidity sweep."
+    return "New York session volatil. Fokus eksekusi cepat dan risk ketat."
+
+
 def clean_num(value):
     if value is None:
         return None
@@ -244,16 +262,15 @@ def get_market_analysis(pair_key, tf_key):
         m5 = fetch_tf("M5") if tf_key != "M5" else tf_data
 
     except Exception as e:
-        return f"""
-👑 <b>CAPITAL ELITE PROJECT</b>
+        print("MARKET ENGINE ERROR:", type(e).__name__, str(e))
+        return """
+⚜ <b>CAPITAL ELITE INTELLIGENCE</b>
 
-⚠️ <b>DEBUG ERROR</b>
+📡 <b>Market Data Sync</b>
+Sistem sedang validasi data market terbaru.
+Coba ulang 30-60 detik lagi.
 
-Type:
-{type(e).__name__}
-
-Detail:
-{str(e)}
+<i>Quality over speed. Ini bukan error bot, data provider sedang membatasi request.</i>
 """
 
     price = tf_data["price"]
@@ -362,6 +379,12 @@ Detail:
     confidence_bar = conf_bar(confidence)
     entry_mid = (aggressive_low + aggressive_high) / 2
     rr = round(abs(tp2 - entry_mid) / max(abs(entry_mid - sl), 0.0001), 1)
+    grade, grade_label, risk_level = setup_grade(confidence, score_gap)
+    confluence = 0
+    confluence += 1 if h1_bias == signal.replace("BUY", "BULLISH").replace("SELL", "BEARISH") else 0
+    confluence += 1 if m15_bias in [signal.replace("BUY", "BULLISH").replace("SELL", "BEARISH"), "SIDEWAYS"] else 0
+    confluence += 1 if m5_bias == signal.replace("BUY", "BULLISH").replace("SELL", "BEARISH") else 0
+    session_note = premium_session_note(session_tag)
 
     if confidence >= 80:
         mode = "🚀 <b>EXECUTE SMALL</b>"
@@ -375,18 +398,28 @@ Detail:
 
     if true_no_setup:
         return f"""
-👑 <b>CAPITAL ELITE PROJECT</b>
+⚜ <b>CAPITAL ELITE INTELLIGENCE</b>
+<code>SMC Market Engine</code>
 
-💱 <b>{pair['name']}</b> | <b>{tf_key}</b>
-⚪ <b>NO SETUP</b>
+💱 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
+⚪ <b>NO TRADE ZONE</b>
 
-📊 Confidence <b>{confidence}%</b>
+📊 <b>Setup Score</b>
+Confidence: <b>{confidence}%</b>
+Grade: <b>{grade}</b> • Risk: <b>{risk_level}</b>
 {confidence_bar}
 
-🧠 <b>Market Read</b>
+🧭 <b>Multi-Timeframe Read</b>
+H1  : <b>{h1_bias}</b>
+M15 : <b>{m15_bias}</b>
+M5  : <b>{m5_bias}</b>
+Confluence: <b>{confluence}/3</b>
+
+🧠 <b>Elite Notes</b>
 • HTF belum clean
 • Momentum dua arah masih tarik-tarikan
 • Belum ada edge yang enak buat akun kecil
+• {session_note}
 
 🛡️ <b>Small Account Rule</b>
 Jangan maksa entry kalau RR belum jelas.
@@ -398,36 +431,52 @@ Trading mengandung risiko — kelola modal dengan bijak.
 """
 
     return f"""
-👑 <b>CAPITAL ELITE PROJECT V2</b>
-<code>SMC Signal Desk</code>
+⚜ <b>CAPITAL ELITE INTELLIGENCE</b>
+<code>Premium SMC Signal Desk</code>
 
 💱 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
+{grade_label}
 <b>{signal_label}</b>
 
-⚡ <b>Agressive</b>
-<code>{fmt(aggressive_low)} - {fmt(aggressive_high)}</code>
-
-💎 <b>Sniper Zone</b>
-<code>{fmt(sniper_low)} - {fmt(sniper_high)}</code>
-
-🛑 <b>SL</b> <code>{fmt(sl)}</code>
-🎯 <b>TP</b> <code>{fmt(tp1)}</code> | <code>{fmt(tp2)}</code> | <code>{fmt(tp3)}</code>
-⚖️ <b>RR</b> 1:{rr}
-
-📊 Confidence <b>{confidence}%</b>
+📊 <b>Market Score</b>
+Confidence: <b>{confidence}%</b>
+Grade: <b>{grade}</b> • Risk: <b>{risk_level}</b>
+Confluence: <b>{confluence}/3</b>
 {confidence_bar}
 
-🧠 <b>Alasan Entry</b>
+🧭 <b>Multi-Timeframe Bias</b>
+H1  : <b>{h1_bias}</b>
+M15 : <b>{m15_bias}</b>
+M5  : <b>{m5_bias}</b>
+
+⚡ <b>Aggressive Entry</b>
+<code>{fmt(aggressive_low)} - {fmt(aggressive_high)}</code>
+
+💎 <b>Sniper Entry Zone</b>
+<code>{fmt(sniper_low)} - {fmt(sniper_high)}</code>
+
+🛑 <b>Stop Loss</b>
+<code>{fmt(sl)}</code>
+
+🎯 <b>Take Profit Area</b>
+TP1: <code>{fmt(tp1)}</code>
+TP2: <code>{fmt(tp2)}</code>
+TP3: <code>{fmt(tp3)}</code>
+RR: <b>1:{rr}</b>
+
+🧠 <b>Elite Reasoning</b>
 • {htf_text}
 • {poi_label}
 • {sweep_label}
 • {mss_label}
+• {session_note}
 
 {mode}
 <i>{vibe}</i>
 
-🛡️ <b>Mode Akun Kecil</b>
+🛡️ <b>Execution Rule</b>
 Entry kecil dulu. Add cuma kalau retest valid.
+Pindahkan SL ke BE setelah TP1 jika market clean.
 {invalid_text}
 
 ⚠️ <b>DISCLAIMER</b>
@@ -631,24 +680,24 @@ def main_menu(user_id):
 
     text = f"""
 👑 <b>CAPITAL ELITE PROJECT</b>
-<code>SMC Signal Bot Dan Analisa</code>
+<code>Signal Analisis Market</code>
 
 {status_line}
 {access_line}
 
-📊 <b>Market Scan</b>
-Aggressive • Sniper • SL • TP
+📊 <b>Market Intelligence</b>
+MTF Bias • Sniper Zone • SL • TP1/TP2/TP3
 
 🧠 <b>SMC Engine</b>
-HTF Bias • Liquidity • POI • MSS
+HTF Bias • Liquidity • POI • MSS • Confidence Score
 
-📰 <b>News Desk</b>
-CPI • NFP • FOMC • PMI
+📰 <b>News Intelligence</b>
+CPI • NFP • FOMC • PMI • No Trade Zone
 
-🟢 <b>Engine Online</b>
-Gas pilih menu di bawah
+🟢 <b>Elite Engine Online</b>
+Pilih menu di bawah.
 
-link group ada di bio
+Link group ada di bio
 """
 
     keyboard = [
@@ -1032,7 +1081,7 @@ import random
 
 async def auto_broadcast(context):
     pesan = random.choice([
-        """📢 Mau Akses Bot Analisa Trading?
+        """📢 Mau Akses Bot Analisa Trading Gratis?
 
 ✅ Analisa Market Harian
 ✅ Area Entry Potensial
@@ -1078,56 +1127,54 @@ Segala keputusan trading sepenuhnya menjadi tanggung jawab masing-masing penggun
             pass
 async def auto_news_alert(context):
     try:
-        events = parse_forex_factory_today()
+        today = datetime.now().strftime("%Y-%m-%d")
+        url = f"https://financialmodelingprep.com/api/v3/economic_calendar?from={today}&to={today}&apikey={FMP_API_KEY}"
 
-        if not events:
-            print("FOREX FACTORY: Tidak ada news USD penting / gagal dibaca")
-            return
-
+        response = requests.get(url, timeout=10)
+        data = response.json()
         users = load_users()
-        today = (datetime.utcnow() + timedelta(hours=7)).strftime("%d %b %Y")
 
-        text = f"""
-📰 <b>CAPITAL ELITE NEWS INTELLIGENCE</b>
+        for event in data:
+            event_name = str(event.get("event", "")).lower()
+            country = str(event.get("country", "")).upper()
 
-🔥 <b>HIGH IMPACT NEWS DETECTED</b>
+            if country == "USD" and (
+                "cpi" in event_name or
+                "consumer price index" in event_name or
+                "core cpi" in event_name or
+                "nfp" in event_name or
+                "fomc" in event_name
+            ):
+                text = f"""
+📰 CAPITAL ELITE NEWS ALERT
 
-📅 <b>Date</b>
-{today}
+🔥 High Impact News Detected
 
-📊 <b>USD News Watch</b>
-"""
+Event:
+{event.get('event')}
 
-        for ev in events[:5]:
-            text += f"\n• <b>USD {ev['impact']}</b>\n{ev['raw'][:120]}\n"
+Country:
+{country}
 
-        text += """
-⚠️ <b>Market Focus</b>
-XAUUSD • BTCUSD • ETHUSD
+Date:
+{event.get('date')}
 
-🚫 <b>No Trade Zone</b>
-Hindari entry besar menjelang news.
-Tunggu spread normal dan candle close setelah news.
-
-🧠 <b>Elite Note</b>
-Jangan nebak news. Tunggu market kasih arah.
+⚠️ Hindari entry besar menjelang news.
+Tunggu market kasih arah yang jelas.
 
 ⚠️ Not Financial Advice
 Trading memiliki risiko tinggi.
 """
 
-        for uid in users.keys():
-            try:
-                await context.bot.send_message(
-                    chat_id=int(uid),
-                    text=text,
-                    parse_mode="HTML"
-                )
-            except:
-                pass
+                for uid in users.keys():
+                    try:
+                        await context.bot.send_message(chat_id=int(uid), text=text)
+                    except:
+                        pass
 
     except Exception as e:
-        print("FOREX FACTORY NEWS ERROR:", e)
+        print("NEWS ERROR:", e)
+
 # ===========================
 # RUN APP
 # ==============================
@@ -1152,11 +1199,13 @@ app.job_queue.run_repeating(
     first=300
 )
 
-app.job_queue.run_repeating(
+from datetime import time as dt_time
+
+app.job_queue.run_daily(
     auto_news_alert,
-    interval=1800,
-    first=60
+    time=dt_time(hour=0, minute=30)
 )
+
 print("CAPITAL ELITE PROJECT BOT ONLINE...")
 app.run_polling()
 
