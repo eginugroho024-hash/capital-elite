@@ -1147,11 +1147,11 @@ app.job_queue.run_repeating(
     first=300
 )
 
-from datetime import time
+from datetime import time as dt_time
 
 app.job_queue.run_daily(
     auto_news_alert,
-    time=time(hour=0, minute=30)
+    time=dt_time(hour=0, minute=30)
 )
 
 print("CAPITAL ELITE PROJECT BOT ONLINE...")
