@@ -8,6 +8,11 @@ import re
 import requests
 import time as pytime
 
+try:
+    import yfinance as yf
+except Exception:
+    yf = None
+
 # ==============================
 # CONFIG
 # ==============================
@@ -19,6 +24,8 @@ FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
 USER_FILE = "users.json"
 NEWS_SENT_FILE = "news_sent.json"
 SIGNAL_LOG_FILE = "signal_log.json"
+MARKET_CACHE = {}
+MARKET_CACHE_SECONDS = 300
 TRIAL_LIMIT_MARKET = 5
 TRIAL_LIMIT_NEWS = 3
 
@@ -289,6 +296,134 @@ def dynamic_sl_tp(pair_key, signal, entry, high, low):
         return entry - sl_dist, entry + tp_dist
     return entry + sl_dist, entry - tp_dist
 
+
+# ==============================
+# MARKET DATA FALLBACK + CACHE
+# ==============================
+def cache_get(key):
+    item = MARKET_CACHE.get(key)
+    if not item:
+        return None
+    age = pytime.time() - item.get("ts", 0)
+    if age <= MARKET_CACHE_SECONDS:
+        return item.get("value")
+    return None
+
+
+def cache_set(key, value):
+    MARKET_CACHE[key] = {
+        "ts": pytime.time(),
+        "value": value
+    }
+
+
+def yf_symbol(pair_key):
+    mapping = {
+        "XAUUSD": "GC=F",
+        "XAGUSD": "SI=F",
+        "BTCUSD": "BTC-USD",
+        "ETHUSD": "ETH-USD",
+    }
+    return mapping.get(pair_key, "GC=F")
+
+
+def yf_interval(tf):
+    mapping = {
+        "M1": "1m",
+        "M3": "5m",
+        "M5": "5m",
+        "M15": "15m",
+        "M30": "30m",
+        "H1": "60m",
+        "H4": "60m",
+        "DAILY": "1d",
+    }
+    return mapping.get(tf, "5m")
+
+
+def yf_period(tf):
+    if tf in ["M1", "M3", "M5", "M15", "M30"]:
+        return "5d"
+    if tf in ["H1", "H4"]:
+        return "1mo"
+    return "6mo"
+
+
+def fetch_yfinance_data(pair_key, tf):
+    if yf is None:
+        raise Exception("Yahoo Finance fallback belum tersedia. Tambahkan yfinance di requirements.txt")
+
+    symbol = yf_symbol(pair_key)
+    interval = yf_interval(tf)
+    period = yf_period(tf)
+
+    data = yf.download(
+        symbol,
+        period=period,
+        interval=interval,
+        progress=False,
+        auto_adjust=False
+    )
+
+    if data is None or data.empty:
+        raise Exception("Yahoo Finance tidak mengembalikan data.")
+
+    # Untuk H4, data 60m dipadatkan 4 candle terakhir sebagai proxy.
+    if tf == "H4" and len(data) >= 4:
+        block = data.tail(4)
+        close = float(block["Close"].iloc[-1])
+        open_price = float(block["Open"].iloc[0])
+        high = float(block["High"].max())
+        low = float(block["Low"].min())
+    else:
+        last = data.iloc[-1]
+        close = float(last["Close"])
+        open_price = float(last["Open"])
+        high = float(last["High"])
+        low = float(last["Low"])
+
+    closes = data["Close"].astype(float)
+    ema20 = float(closes.ewm(span=20, adjust=False).mean().iloc[-1]) if len(closes) >= 20 else close
+    ema50 = float(closes.ewm(span=50, adjust=False).mean().iloc[-1]) if len(closes) >= 50 else close
+
+    delta = closes.diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    rs = gain / loss.replace(0, 0.0001)
+    rsi_series = 100 - (100 / (1 + rs))
+    rsi = float(rsi_series.iloc[-1]) if len(rsi_series.dropna()) else 50.0
+
+    if close > ema20 > ema50:
+        rec = "BUY"
+        bias = "BULLISH"
+    elif close < ema20 < ema50:
+        rec = "SELL"
+        bias = "BEARISH"
+    else:
+        rec = "NEUTRAL"
+        bias = "SIDEWAYS"
+
+    eq = (high + low) / 2
+    rng = max(abs(high - low), 0.0001)
+    candle = "BULLISH" if close > open_price else "BEARISH"
+
+    return {
+        "price": close,
+        "open": open_price,
+        "high": high,
+        "low": low,
+        "eq": eq,
+        "range": rng,
+        "bias": bias,
+        "candle": candle,
+        "rsi": rsi,
+        "rec": rec,
+        "ema20": ema20,
+        "ema50": ema50,
+        "source": "Yahoo Finance Fallback"
+    }
+
+
 # ==============================
 # MARKET ANALYSIS: CAPITAL ELITE SMC ENGINE
 # ==============================
@@ -298,53 +433,65 @@ def get_market_analysis(pair_key, tf_key):
     if tf_key not in TIMEFRAMES:
         tf_key = "M5"
 
+    cache_key = f"{pair_key}_{tf_key}"
+    cached_result = cache_get(cache_key)
+    if cached_result:
+        return cached_result
+
     def fetch_tf(tf):
         tv_interval = TIMEFRAMES.get(tf, "5m")
-        handler = TA_Handler(
-            symbol=pair["symbol"],
-            screener=pair["screener"],
-            exchange=pair["exchange"],
-            interval=tv_interval
-        )
-        data = handler.get_analysis()
-        ind = data.indicators
-        summ = data.summary
 
-        price = ind.get("close")
-        open_price = ind.get("open")
-        high = ind.get("high")
-        low = ind.get("low")
-        ema20 = ind.get("EMA20")
-        ema50 = ind.get("EMA50")
-        rsi = ind.get("RSI")
-        rec = summ.get("RECOMMENDATION", "NEUTRAL")
+        try:
+            handler = TA_Handler(
+                symbol=pair["symbol"],
+                screener=pair["screener"],
+                exchange=pair["exchange"],
+                interval=tv_interval
+            )
+            data = handler.get_analysis()
+            ind = data.indicators
+            summ = data.summary
 
-        if price is None or high is None or low is None:
-            raise Exception("Data market belum lengkap dari provider.")
+            price = ind.get("close")
+            open_price = ind.get("open")
+            high = ind.get("high")
+            low = ind.get("low")
+            ema20 = ind.get("EMA20")
+            ema50 = ind.get("EMA50")
+            rsi = ind.get("RSI")
+            rec = summ.get("RECOMMENDATION", "NEUTRAL")
 
-        price = float(price)
-        open_price = float(open_price) if open_price else price
-        high = float(high)
-        low = float(low)
-        ema20 = float(ema20) if ema20 else price
-        ema50 = float(ema50) if ema50 else price
-        rsi = float(rsi) if rsi else 50.0
-        eq = (high + low) / 2
-        rng = max(abs(high - low), 0.0001)
-        candle = "BULLISH" if price > open_price else "BEARISH"
+            if price is None or high is None or low is None:
+                raise Exception("Data TradingView belum lengkap.")
 
-        if rec in ["BUY", "STRONG_BUY"] or price > ema20 > ema50:
-            bias = "BULLISH"
-        elif rec in ["SELL", "STRONG_SELL"] or price < ema20 < ema50:
-            bias = "BEARISH"
-        else:
-            bias = "SIDEWAYS"
+            price = float(price)
+            open_price = float(open_price) if open_price else price
+            high = float(high)
+            low = float(low)
+            ema20 = float(ema20) if ema20 else price
+            ema50 = float(ema50) if ema50 else price
+            rsi = float(rsi) if rsi else 50.0
+            eq = (high + low) / 2
+            rng = max(abs(high - low), 0.0001)
+            candle = "BULLISH" if price > open_price else "BEARISH"
 
-        return {
-            "price": price, "open": open_price, "high": high, "low": low,
-            "eq": eq, "range": rng, "bias": bias, "candle": candle,
-            "rsi": rsi, "rec": rec, "ema20": ema20, "ema50": ema50
-        }
+            if rec in ["BUY", "STRONG_BUY"] or price > ema20 > ema50:
+                bias = "BULLISH"
+            elif rec in ["SELL", "STRONG_SELL"] or price < ema20 < ema50:
+                bias = "BEARISH"
+            else:
+                bias = "SIDEWAYS"
+
+            return {
+                "price": price, "open": open_price, "high": high, "low": low,
+                "eq": eq, "range": rng, "bias": bias, "candle": candle,
+                "rsi": rsi, "rec": rec, "ema20": ema20, "ema50": ema50,
+                "source": "TradingView"
+            }
+
+        except Exception as tv_error:
+            print("TRADINGVIEW 429/FALLBACK:", tv_error)
+            return fetch_yfinance_data(pair_key, tf)
 
     try:
         tf_data = fetch_tf(tf_key)
@@ -374,6 +521,7 @@ Detail:
     h1_bias = h1["bias"]
     m15_bias = m15["bias"]
     m5_bias = m5["bias"]
+    data_source = tf_data.get("source", "Market Data")
 
     wib_now = datetime.utcnow() + timedelta(hours=7)
     hour = wib_now.hour
@@ -513,7 +661,7 @@ Bukan saran finansial.
 Trading mengandung risiko — kelola modal dengan bijak.
 """
 
-    return f"""
+    result_text = f"""
 👑 <b>CAPITAL ELITE INTELLIGENCE</b>
 <code>SMC Signal Desk • Premium Mode</code>
 
@@ -562,6 +710,9 @@ Entry kecil dulu. Setelah TP1, amankan posisi / geser SL ke BE.
 Bukan saran finansial.
 Trading mengandung risiko — kelola modal dengan bijak.
 """
+
+    cache_set(cache_key, result_text)
+    return result_text
 
 # ==============================
 # NEWS IMPACT ENGINE
