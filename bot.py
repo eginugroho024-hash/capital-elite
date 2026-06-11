@@ -24,6 +24,9 @@ FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
 USER_FILE = "users.json"
 NEWS_SENT_FILE = "news_sent.json"
 SIGNAL_LOG_FILE = "signal_log.json"
+LAST_SIGNAL_FILE = "last_signal.json"
+EXPIRED_REMINDER_FILE = "expired_reminder.json"
+PENDING_PAYMENT_FILE = "pending_payment.json"
 MARKET_CACHE = {}
 MARKET_CACHE_SECONDS = 300
 TRIAL_LIMIT_MARKET = 5
@@ -110,6 +113,92 @@ def log_signal(asset, tf, result_text):
     logs = logs[-100:]
     save_json_file(SIGNAL_LOG_FILE, logs)
 
+def extract_signal_key(signal_text):
+    """
+    Bikin fingerprint sinyal supaya auto signal tidak spam setup yang sama.
+    """
+    clean = re.sub(r"<[^>]+>", "", str(signal_text))
+    direction = "BUY" if "BUY SETUP" in clean or "STRONG BUY" in clean else "SELL" if "SELL SETUP" in clean or "STRONG SELL" in clean else "UNKNOWN"
+
+    entry_match = re.search(r"Entry:\s*([0-9.]+)\s*-\s*([0-9.]+)", clean, re.I)
+    if entry_match:
+        try:
+            mid = (float(entry_match.group(1)) + float(entry_match.group(2))) / 2
+            entry_bucket = round(mid, 1)
+        except Exception:
+            entry_bucket = "NA"
+    else:
+        recent_match = re.search(r"Recent Entry:\s*([0-9.]+)", clean, re.I)
+        entry_bucket = recent_match.group(1) if recent_match else "NA"
+
+    return f"{direction}_{entry_bucket}"
+
+
+def should_send_auto_signal(asset, signal_text, cooldown_minutes=90):
+    last_db = load_json_file(LAST_SIGNAL_FILE, {})
+    key = extract_signal_key(signal_text)
+    now = wib_now()
+
+    last = last_db.get(asset)
+    if last:
+        try:
+            last_time = datetime.strptime(last.get("time"), "%Y-%m-%d %H:%M:%S")
+            same_key = last.get("key") == key
+            still_cooldown = (now - last_time).total_seconds() < cooldown_minutes * 60
+            if same_key and still_cooldown:
+                return False
+        except Exception:
+            pass
+
+    last_db[asset] = {
+        "key": key,
+        "time": now.strftime("%Y-%m-%d %H:%M:%S")
+    }
+    save_json_file(LAST_SIGNAL_FILE, last_db)
+    return True
+
+
+def has_high_impact_news_risk():
+    """
+    Simple guard: kalau Forex Factory kebaca ada CPI/NFP/FOMC/Rate/Powell hari ini,
+    auto signal dipause. Manual analysis tetap bisa dipakai user.
+    """
+    try:
+        events = parse_forex_factory_today()
+        if not events:
+            return False
+
+        risk_terms = [
+            "cpi", "core cpi", "consumer price index", "nfp", "non-farm", "nonfarm",
+            "fomc", "federal funds rate", "interest rate", "powell"
+        ]
+
+        for ev in events:
+            raw = str(ev.get("raw", "")).lower()
+            if any(term in raw for term in risk_terms):
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def premium_expire_text(uid, days_left, premium_until):
+    return f"""
+⏳ <b>CAPITAL ELITE REMINDER</b>
+
+Premium lu akan habis dalam <b>{days_left} hari</b>.
+
+Expired:
+<code>{premium_until}</code>
+
+💎 Perpanjang akses:
+{ADMIN_CONTACT}
+
+⚠️ <b>Not Financial Advice</b>
+Trading memiliki risiko tinggi.
+"""
+
+
 
 def get_user(user_id):
     users = load_users()
@@ -188,6 +277,16 @@ def fmt(x):
 def conf_bar(conf):
     full = int(conf / 10)
     return "█" * full + "░" * (10 - full)
+
+def disclaimer_footer():
+    return """
+━━━━━━━━━━━━━━
+⚠️ <b>Not Financial Advice</b>
+Trading memiliki risiko tinggi.
+Gunakan Stop Loss.
+Kelola risiko dan modal dengan bijak.
+━━━━━━━━━━━━━━
+"""
 
 
 def clean_num(value):
@@ -630,6 +729,7 @@ Detail:
 
     confidence_bar = conf_bar(confidence)
     entry_mid = (aggressive_low + aggressive_high) / 2
+    recent_entry = fmt(price)
     rr = round(abs(tp2 - entry_mid) / max(abs(entry_mid - sl), 0.0001), 1)
 
     if true_no_setup:
@@ -656,59 +756,35 @@ Market belum kasih edge bersih. Jangan maksa entry kalau confluence belum kuat.
 🛡️ <b>Small Account Rule</b>
 Better miss than MC. Tunggu setup lebih clean.
 
-⚠️ <b>DISCLAIMER</b>
-Bukan saran finansial.
-Trading mengandung risiko — kelola modal dengan bijak.
+{disclaimer_footer()}
 """
 
     result_text = f"""
-👑 <b>CAPITAL ELITE INTELLIGENCE</b>
-<code>SMC Signal Desk • Premium Mode</code>
+🎯 <b>CAPITAL ELITE SIGNAL</b>
 
-💱 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
-{setup_type}
+💰 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
+📡 <code>{data_source}</code>
+
 <b>{signal_label}</b>
+📊 Score: <b>{confidence}/100</b> | RR 1:{rr}
 
-📌 <b>Market Bias</b>
-H1: <b>{h1_bias}</b>
-M15: <b>{m15_bias}</b>
-M5: <b>{m5_bias}</b>
-Action: <b>{action_bias}</b>
+📍 Entry: <code>{fmt(aggressive_low)} - {fmt(aggressive_high)}</code>
+💎 Sniper: <code>{fmt(sniper_low)} - {fmt(sniper_high)}</code>
+📌 Recent Entry: <code>{recent_entry}</code>
 
-⚡ <b>Aggressive Entry</b>
-<code>{fmt(aggressive_low)} - {fmt(aggressive_high)}</code>
+🛑 SL: <code>{fmt(sl)}</code>
+🎯 TP1: <code>{fmt(tp1)}</code>
+🎯 TP2: <code>{fmt(tp2)}</code>
+🎯 TP3: <code>{fmt(tp3)}</code>
 
-💎 <b>Sniper Zone</b>
-<code>{fmt(sniper_low)} - {fmt(sniper_high)}</code>
+📈 H1: <b>{h1_bias}</b> | M15: <b>{m15_bias}</b>
+📈 M5: <b>{m5_bias}</b>
 
-🛑 <b>Stop Loss</b>
-<code>{fmt(sl)}</code>
+{mode}
+<i>{vibe}</i>
 
-🎯 <b>Take Profit</b>
-TP1: <code>{fmt(tp1)}</code>
-TP2: <code>{fmt(tp2)}</code>
-TP3: <code>{fmt(tp3)}</code>
-
-📊 <b>Elite Score</b>
-Grade: <b>{grade}</b>
-Confidence: <b>{confidence}%</b>
-{confidence_bar}
-Risk: <b>{risk_level}</b>
-RR Target: <b>1:{rr}</b>
-
-🧠 <b>Confluence</b>
-• {poi_label}
-• {sweep_label}
-• {mss_label}
-• {session_note}
-
-🛡️ <b>Trade Management</b>
-Entry kecil dulu. Setelah TP1, amankan posisi / geser SL ke BE.
-{invalid_text}
-
-⚠️ <b>DISCLAIMER</b>
-Bukan saran finansial.
-Trading mengandung risiko — kelola modal dengan bijak.
+⚠️ Tunggu candle konfirmasi sebelum entry.
+{disclaimer_footer()}
 """
 
     cache_set(cache_key, result_text)
@@ -1107,7 +1183,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Scanner ini bukan tombol all-in.
 Tetap tunggu candle valid dan jaga risk.
 
-⚠️ Not Financial Advice
+⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
 {trial_note}
 """
@@ -1218,6 +1294,8 @@ Hubungi Admin — S&K berlaku.
 {ADMIN_CONTACT}
 
 ⚡ Setelah bayar, kirim bukti transfer.
+
+Klik /pay untuk ajukan aktivasi otomatis ke admin.
 """
         await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="back_start")]]), parse_mode="HTML")
 
@@ -1420,7 +1498,7 @@ async def sniper_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Scanner ini bukan tombol all-in.
 Tetap tunggu candle valid dan jaga risk.
 
-⚠️ Not Financial Advice
+⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
 {trial_note}
 """
@@ -1491,6 +1569,162 @@ async def fomc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hasil = analyze_fomc(tone)
     add_news_usage(user_id)
     await update.message.reply_text(hasil, parse_mode="HTML")
+
+
+
+def activate_premium_user(target_id, days=60):
+    users = load_users()
+    target_id = str(target_id)
+    until = datetime.now() + timedelta(days=days)
+
+    if target_id not in users:
+        users[target_id] = {
+            "market_used": 0,
+            "news_used": 0,
+            "premium": True,
+            "premium_until": until.strftime("%Y-%m-%d %H:%M:%S"),
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+    else:
+        users[target_id]["premium"] = True
+        users[target_id]["premium_until"] = until.strftime("%Y-%m-%d %H:%M:%S")
+
+    save_users(users)
+    return until
+
+
+async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("Lu bukan admin.")
+        return
+
+    if len(context.args) < 1:
+        await update.message.reply_text("Format: /approve ID_TELEGRAM\nContoh: /approve 123456789")
+        return
+
+    target_id = str(context.args[0])
+    days = 60
+
+    if len(context.args) >= 2:
+        try:
+            days = int(context.args[1])
+        except Exception:
+            days = 60
+
+    until = activate_premium_user(target_id, days)
+
+    pending = load_json_file(PENDING_PAYMENT_FILE, {})
+    if target_id in pending:
+        pending[target_id]["status"] = "approved"
+        pending[target_id]["approved_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        save_json_file(PENDING_PAYMENT_FILE, pending)
+
+    admin_text = f"""
+✅ <b>PAYMENT APPROVED</b>
+
+User: <code>{target_id}</code>
+Durasi: <b>{days} hari</b>
+Expired: <code>{until.strftime('%Y-%m-%d %H:%M:%S')}</code>
+"""
+    await update.message.reply_text(admin_text, parse_mode="HTML")
+
+    try:
+        user_text = f"""
+👑 <b>CAPITAL ELITE PROJECT</b>
+
+✅ <b>Premium lu sudah aktif</b>
+
+Durasi: <b>{days} hari</b>
+Expired: <code>{until.strftime('%d %b %Y %H:%M WIB')}</code>
+
+Akses:
+✅ Manual Analysis
+✅ Sniper Scanner
+✅ Auto Signal
+✅ News Alert
+✅ Risk Calculator
+
+Trade smart. Manage your risk.
+
+⚠️ <b>Not Financial Advice</b>
+Trading memiliki risiko tinggi.
+"""
+        await context.bot.send_message(chat_id=int(target_id), text=user_text, parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"Premium aktif, tapi gagal kirim notif user: {e}")
+
+
+async def request_payment_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    user_name = update.effective_user.full_name or "-"
+    username = update.effective_user.username or "-"
+
+    pending = load_json_file(PENDING_PAYMENT_FILE, {})
+    pending[user_id] = {
+        "name": user_name,
+        "username": username,
+        "status": "waiting_approval",
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    save_json_file(PENDING_PAYMENT_FILE, pending)
+
+    text = f"""
+💎 <b>CAPITAL ELITE PREMIUM REQUEST</b>
+
+ID lu:
+<code>{user_id}</code>
+
+Status:
+⏳ Menunggu approval admin
+
+Setelah transfer, kirim bukti pembayaran ke:
+{ADMIN_CONTACT}
+
+Admin akan aktifkan premium dengan:
+<code>/approve {user_id}</code>
+
+⚠️ <b>Not Financial Advice</b>
+Trading memiliki risiko tinggi.
+"""
+    await update.message.reply_text(text, parse_mode="HTML")
+
+    try:
+        admin_msg = f"""
+🧾 <b>NEW PAYMENT REQUEST</b>
+
+Name: <b>{user_name}</b>
+Username: @{username}
+ID: <code>{user_id}</code>
+
+Approve:
+<code>/approve {user_id}</code>
+
+Custom 90 hari:
+<code>/approve {user_id} 90</code>
+"""
+        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode="HTML")
+    except Exception:
+        pass
+
+
+async def pending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("Lu bukan admin.")
+        return
+
+    pending = load_json_file(PENDING_PAYMENT_FILE, {})
+    rows = []
+    for uid, data in pending.items():
+        if data.get("status") == "waiting_approval":
+            rows.append(f"• <code>{uid}</code> — {data.get('name','-')} (@{data.get('username','-')})")
+
+    if not rows:
+        await update.message.reply_text("Tidak ada pending payment.")
+        return
+
+    text = "🧾 <b>PENDING PAYMENT</b>\n\n" + "\n".join(rows[:80]) + "\n\nApprove pakai:\n<code>/approve ID</code>"
+    await update.message.reply_text(text, parse_mode="HTML")
+
 
 
 async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1605,6 +1839,103 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML")
 
 
+
+async def listpremium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("Lu bukan admin.")
+        return
+
+    users = load_users()
+    lines = []
+    for uid in list(users.keys()):
+        u = get_user(int(uid))
+        if u.get("premium"):
+            until = u.get("premium_until", "LIFETIME")
+            lines.append(f"• <code>{uid}</code> — {until}")
+
+    if not lines:
+        text = "Belum ada user premium aktif."
+    else:
+        text = "💎 <b>PREMIUM ACTIVE LIST</b>\n\n" + "\n".join(lines[:80])
+
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def resettrial_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("Lu bukan admin.")
+        return
+
+    if len(context.args) < 1:
+        await update.message.reply_text("Format: /resettrial ID_TELEGRAM")
+        return
+
+    uid = str(context.args[0])
+    users = load_users()
+
+    if uid not in users:
+        users[uid] = {
+            "market_used": 0,
+            "news_used": 0,
+            "premium": False,
+            "premium_until": None,
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+    else:
+        users[uid]["market_used"] = 0
+        users[uid]["news_used"] = 0
+
+    save_users(users)
+    await update.message.reply_text(f"Trial user {uid} sudah direset.")
+
+
+async def expired_reminder_job(context):
+    try:
+        users = load_users()
+        reminder_db = load_json_file(EXPIRED_REMINDER_FILE, {})
+        today_key = wib_now().strftime("%Y-%m-%d")
+
+        for uid in list(users.keys()):
+            u = get_user(int(uid))
+            if not u.get("premium"):
+                continue
+
+            premium_until = u.get("premium_until")
+            if premium_until in [None, "LIFETIME"]:
+                continue
+
+            try:
+                exp = datetime.strptime(premium_until, "%Y-%m-%d %H:%M:%S")
+                days_left = (exp.date() - wib_now().date()).days
+            except Exception:
+                continue
+
+            if days_left in [3, 1, 0]:
+                key = f"{uid}_{today_key}_{days_left}"
+                if reminder_db.get(key):
+                    continue
+
+                try:
+                    await context.bot.send_message(
+                        chat_id=int(uid),
+                        text=premium_expire_text(uid, days_left, premium_until),
+                        parse_mode="HTML"
+                    )
+                    reminder_db[key] = True
+                except Exception:
+                    pass
+
+        # keep db small
+        if len(reminder_db) > 500:
+            reminder_db = dict(list(reminder_db.items())[-300:])
+
+        save_json_file(EXPIRED_REMINDER_FILE, reminder_db)
+
+    except Exception as e:
+        print("EXPIRED REMINDER ERROR:", e)
+
+
+
 async def auto_signal_broadcast(context):
     try:
         users = load_users()
@@ -1613,9 +1944,17 @@ async def auto_signal_broadcast(context):
             print("AUTO SIGNAL: tidak ada premium user")
             return
 
+        if has_high_impact_news_risk():
+            print("AUTO SIGNAL: paused karena ada high impact USD news risk")
+            return
+
         signal_text = get_market_analysis("XAUUSD", "M15")
         if not is_trade_signal_text(signal_text):
             print("AUTO SIGNAL: no setup / error, tidak dibroadcast")
+            return
+
+        if not should_send_auto_signal("XAUUSD", signal_text, cooldown_minutes=90):
+            print("AUTO SIGNAL: duplicate setup, skip broadcast")
             return
 
         log_signal("XAUUSD", "M15", signal_text)
@@ -1678,7 +2017,7 @@ Pantau risk sentiment dan reaksi terhadap USD news.
 🛡️ <b>Elite Rule</b>
 Jangan overlot di awal hari. Tunggu setup, bukan kejar market.
 
-⚠️ Not Financial Advice
+⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
 """
         for uid in targets:
@@ -1939,7 +2278,7 @@ Tetap validasi kalender ekonomi sebelum news besar.
 🧠 <b>Elite Note</b>
 Jangan nebak news. Tunggu market kasih arah.
 
-⚠️ Not Financial Advice
+⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
 """
 
@@ -1987,7 +2326,7 @@ Pantau:
 Kalau market sudah terbang duluan, jangan dikejar.
 Tunggu retrace atau setup baru.
 
-⚠️ Not Financial Advice
+⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
 """
         for uid in targets:
@@ -2009,6 +2348,9 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("news", news_command))
 app.add_handler(CommandHandler("fomc", fomc_command))
 app.add_handler(CommandHandler("premium", premium))
+app.add_handler(CommandHandler("approve", approve_command))
+app.add_handler(CommandHandler("pay", request_payment_command))
+app.add_handler(CommandHandler("pending", pending_command))
 app.add_handler(CommandHandler("unpremium", unpremium))
 app.add_handler(CommandHandler("cekuser", cekuser))
 app.add_handler(CommandHandler("broadcast", broadcast))
@@ -2016,6 +2358,8 @@ app.add_handler(CommandHandler("risk", risk_command))
 app.add_handler(CommandHandler("edukasi", edukasi_command))
 app.add_handler(CommandHandler("marketnews", marketnews_command))
 app.add_handler(CommandHandler("stats", stats_command))
+app.add_handler(CommandHandler("listpremium", listpremium_command))
+app.add_handler(CommandHandler("resettrial", resettrial_command))
 app.add_handler(CommandHandler("commands", commands_command))
 app.add_handler(CommandHandler("xau", xau_command))
 app.add_handler(CommandHandler("xag", xag_command))
@@ -2056,6 +2400,12 @@ app.job_queue.run_daily(
 app.job_queue.run_daily(
     new_york_session_alert,
     time=dt_time(hour=12, minute=0)
+)
+
+# Reminder premium expired 09:00 WIB = 02:00 UTC
+app.job_queue.run_daily(
+    expired_reminder_job,
+    time=dt_time(hour=2, minute=0)
 )
 
 print("CAPITAL ELITE PROJECT BOT ONLINE...")
