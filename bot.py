@@ -28,8 +28,12 @@ SIGNAL_LOG_FILE = "signal_log.json"
 LAST_SIGNAL_FILE = "last_signal.json"
 EXPIRED_REMINDER_FILE = "expired_reminder.json"
 PENDING_PAYMENT_FILE = "pending_payment.json"
+REALTIME_SIGNAL_FILE = "realtime_signal.json"
+REALTIME_SCAN_PAIRS = ["XAUUSD", "BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "NAS100"]
+REALTIME_SCAN_TF = "M5"
+REALTIME_SCAN_INTERVAL = 60
 MARKET_CACHE = {}
-MARKET_CACHE_SECONDS = 300
+MARKET_CACHE_SECONDS = 0
 TRIAL_LIMIT_MARKET = 5
 TRIAL_LIMIT_NEWS = 3
 
@@ -397,12 +401,7 @@ def dynamic_sl_tp(pair_key, signal, entry, high, low):
 # MARKET DATA FALLBACK + CACHE
 # ==============================
 def cache_get(key):
-    item = MARKET_CACHE.get(key)
-    if not item:
-        return None
-    age = pytime.time() - item.get("ts", 0)
-    if age <= MARKET_CACHE_SECONDS:
-        return item.get("value")
+    # Realtime mode: market analysis selalu fetch data baru.
     return None
 
 
@@ -590,6 +589,36 @@ def fetch_twelvedata_candles(pair_key, tf, outputsize=180):
 
     candles = list(reversed(candles))
     return candles
+
+
+
+def fetch_twelvedata_quote(pair_key):
+    """
+    Ambil harga live/realtime dari TwelveData quote.
+    Ini dipakai untuk Price/Recent agar lebih dekat dengan harga chart berjalan.
+    """
+    if not TD_API_KEY:
+        raise Exception("TD_API_KEY belum diisi di Railway Variables.")
+
+    symbol = td_symbol(pair_key)
+    url = "https://api.twelvedata.com/quote"
+    params = {
+        "symbol": symbol,
+        "apikey": TD_API_KEY
+    }
+
+    r = requests.get(url, params=params, timeout=12)
+    data = r.json()
+
+    if data.get("status") == "error":
+        raise Exception(data.get("message", "TwelveData quote error"))
+
+    for key in ["close", "price", "bid"]:
+        val = data.get(key)
+        if val not in [None, "", "None"]:
+            return float(val)
+
+    raise Exception("TwelveData quote tidak mengembalikan harga live.")
 
 
 def candle_col(candles, key):
@@ -816,7 +845,13 @@ Pastikan Railway Variables:
 {disclaimer_footer()}
 """
 
-    price = price_now(c_m5)
+    try:
+        live_price = fetch_twelvedata_quote(pair_key)
+    except Exception as quote_error:
+        print("TWELVEDATA QUOTE FALLBACK:", quote_error)
+        live_price = price_now(c_m5)
+
+    price = float(live_price)
     h1_bias = htf_bias(c_h1)
     h4_bias = htf_bias(c_h4)
     m15_bias = htf_bias(c_m15)
@@ -923,7 +958,8 @@ Pastikan Railway Variables:
 
 💰 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
 📍 Price: <code>{fmt(price)}</code>
-📡 Source: <b>TwelveData</b>
+📡 Source: <b>TwelveData Live Quote</b>
+⏱️ Update: <b>{wib_now().strftime("%H:%M:%S WIB")}</b>
 
 📊 Score: <b>{min(score, 99)}/100</b>
 🧭 Bias: <b>{direction}</b>
@@ -957,7 +993,8 @@ Tunggu sweep + displacement + MSS + FVG/OB.
 
 💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
 📍 Price: <code>{fmt(price)}</code>
-📡 Source: <b>TwelveData</b>
+📡 Source: <b>TwelveData Live Quote</b>
+⏱️ Update: <b>{wib_now().strftime("%H:%M:%S WIB")}</b>
 📊 Score: <b>{min(score, 99)}/100</b>
 
 POI valid tapi terlalu jauh dari harga sekarang.
@@ -992,7 +1029,8 @@ Tunggu retrace mendekati zone.
 💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
 {label}
 📊 Score: <b>{min(score, 99)}/100</b> | <b>{grade}</b>
-📡 Source: <b>TwelveData</b>
+📡 Source: <b>TwelveData Live Quote</b>
+⏱️ Update: <b>{wib_now().strftime("%H:%M:%S WIB")}</b>
 
 📍 Entry: <code>{fmt(entry_low)} - {fmt(entry_high)}</code>
 📌 Recent: <code>{recent_entry}</code>
@@ -1299,7 +1337,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         parts = data.split("_")
         pair_key, tf_key = parts[1], parts[2]
-        await q.edit_message_text(f"🔍 <b>Scanning {PAIRS[pair_key]['name']}</b>\nTF: <b>{tf_key}</b>\n\nValidating Hybrid Entry Engine...", parse_mode="HTML")
+        await q.edit_message_text(f"🔍 <b>Scanning {PAIRS[pair_key]['name']}</b>\nTF: <b>{tf_key}</b>\n\nFetching realtime quote + validating SMC/ICT/WCO...", parse_mode="HTML")
         try:
             hasil = get_market_analysis(pair_key, tf_key)
             add_market_usage(user_id)
@@ -2069,6 +2107,34 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+
+async def realtime_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("Lu bukan admin.")
+        return
+
+    db = load_json_file(REALTIME_SIGNAL_FILE, {})
+    pairs = ", ".join(REALTIME_SCAN_PAIRS)
+
+    text = f"""
+📡 <b>REALTIME SCANNER STATUS</b>
+
+Status: <b>ACTIVE</b>
+Interval: <b>{REALTIME_SCAN_INTERVAL} detik</b>
+TF: <b>{REALTIME_SCAN_TF}</b>
+Pairs: <code>{pairs}</code>
+
+Last Signals:
+"""
+    if not db:
+        text += "\nBelum ada signal realtime."
+    else:
+        for pair, data in db.items():
+            text += f"\n• {pair} — Score {data.get('score','-')} — {data.get('time','-')}"
+
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
 async def listpremium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("Lu bukan admin.")
@@ -2163,6 +2229,126 @@ async def expired_reminder_job(context):
     except Exception as e:
         print("EXPIRED REMINDER ERROR:", e)
 
+
+
+
+# ==============================
+# REALTIME AUTO SCANNER
+# ==============================
+def parse_signal_score(text):
+    m = re.search(r"Score:\s*</b>\s*<b>(\d+)/100", str(text))
+    if not m:
+        m = re.search(r"Score:\s*<b>(\d+)/100", str(text))
+    if not m:
+        m = re.search(r"Score:\s*(\d+)/100", str(text), re.I)
+    if not m:
+        return 0
+    try:
+        return int(m.group(1))
+    except Exception:
+        return 0
+
+
+def parse_signal_direction(text):
+    clean = str(text)
+    if "STRONG BUY" in clean or "BUY PLAN" in clean or "🟢" in clean:
+        return "BUY"
+    if "STRONG SELL" in clean or "SELL PLAN" in clean or "🔴" in clean:
+        return "SELL"
+    return "WAIT"
+
+
+def parse_signal_entry(text):
+    clean = re.sub(r"<[^>]+>", "", str(text))
+    m = re.search(r"Entry:\s*([0-9.]+)\s*-\s*([0-9.]+)", clean, re.I)
+    if not m:
+        return "NA"
+    try:
+        a = float(m.group(1))
+        b = float(m.group(2))
+        return str(round((a + b) / 2, 2))
+    except Exception:
+        return "NA"
+
+
+def should_broadcast_realtime(pair_key, tf_key, analysis_text, cooldown_minutes=90):
+    if "NO TRADE" in str(analysis_text):
+        return False
+
+    score = parse_signal_score(analysis_text)
+    if score < 88:
+        return False
+
+    direction = parse_signal_direction(analysis_text)
+    entry = parse_signal_entry(analysis_text)
+    key = f"{pair_key}_{tf_key}_{direction}_{entry}"
+
+    db = load_json_file(REALTIME_SIGNAL_FILE, {})
+    now = wib_now()
+    last = db.get(pair_key)
+
+    if last:
+        try:
+            last_time = datetime.strptime(last.get("time"), "%Y-%m-%d %H:%M:%S")
+            if last.get("key") == key and (now - last_time).total_seconds() < cooldown_minutes * 60:
+                return False
+        except Exception:
+            pass
+
+    db[pair_key] = {
+        "key": key,
+        "time": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "score": score
+    }
+
+    # keep db small
+    save_json_file(REALTIME_SIGNAL_FILE, db)
+    return True
+
+
+async def realtime_auto_scanner(context):
+    try:
+        if has_high_impact_news_risk():
+            print("REALTIME SCANNER: pause karena high impact news risk")
+            return
+
+        users = load_users()
+        targets = premium_users(users)
+        if not targets:
+            print("REALTIME SCANNER: tidak ada premium user")
+            return
+
+        for pair_key in REALTIME_SCAN_PAIRS:
+            try:
+                analysis = get_market_analysis(pair_key, REALTIME_SCAN_TF)
+
+                if should_broadcast_realtime(pair_key, REALTIME_SCAN_TF, analysis):
+                    msg = f"""🚨 <b>CAPITAL ELITE REALTIME SIGNAL</b>
+<code>{PAIRS[pair_key]['name']} • {REALTIME_SCAN_TF} • Auto Scanner</code>
+
+{analysis}
+"""
+                    log_signal(pair_key, REALTIME_SCAN_TF, analysis)
+
+                    for uid in targets:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=int(uid),
+                                text=msg,
+                                parse_mode="HTML"
+                            )
+                        except Exception:
+                            pass
+
+                    print(f"REALTIME SIGNAL SENT: {pair_key}")
+
+                pytime.sleep(1.2)
+
+            except Exception as e:
+                print(f"REALTIME SCANNER ERROR {pair_key}:", e)
+
+    except Exception as e:
+        print("REALTIME AUTO SCANNER ERROR:", e)
 
 
 async def auto_signal_broadcast(context):
@@ -2773,6 +2959,7 @@ app.add_handler(CommandHandler("risk", risk_command))
 app.add_handler(CommandHandler("edukasi", edukasi_command))
 app.add_handler(CommandHandler("marketnews", marketnews_command))
 app.add_handler(CommandHandler("stats", stats_command))
+app.add_handler(CommandHandler("realtime", realtime_status_command))
 app.add_handler(CommandHandler("listpremium", listpremium_command))
 app.add_handler(CommandHandler("resettrial", resettrial_command))
 app.add_handler(CommandHandler("commands", commands_command))
@@ -2821,6 +3008,13 @@ app.job_queue.run_daily(
 app.job_queue.run_daily(
     expired_reminder_job,
     time=dt_time(hour=2, minute=0)
+)
+
+# Realtime auto scanner every 60 seconds
+app.job_queue.run_repeating(
+    realtime_auto_scanner,
+    interval=REALTIME_SCAN_INTERVAL,
+    first=30
 )
 
 print("CAPITAL ELITE PROJECT BOT ONLINE...")
