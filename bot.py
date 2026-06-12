@@ -37,20 +37,16 @@ PAYMENT_TEXT = "DANA / QRIS: 085778001402"
 ADMIN_CONTACT = "@egingroho"
 
 PAIRS = {
-    "XAUUSD": {
-    "symbol": "XAUUSD",
-    "screener": "cfd",
-    "exchange": "FOREXCOM",
-    "name": "XAU/USD"
-},
-    "XAGUSD": {
-    "symbol": "SILVER",
-    "screener": "cfd",
-    "exchange": "TVC",
-    "name": "XAG/USD"
-},
+    "XAUUSD": {"symbol": "XAUUSD", "screener": "cfd", "exchange": "FOREXCOM", "name": "XAU/USD"},
+    "XAGUSD": {"symbol": "SILVER", "screener": "cfd", "exchange": "TVC", "name": "XAG/USD"},
     "BTCUSD": {"symbol": "BTCUSD", "screener": "crypto", "exchange": "BITSTAMP", "name": "BTC/USD"},
     "ETHUSD": {"symbol": "ETHUSD", "screener": "crypto", "exchange": "BITSTAMP", "name": "ETH/USD"},
+    "EURUSD": {"symbol": "EURUSD", "screener": "forex", "exchange": "OANDA", "name": "EUR/USD"},
+    "GBPUSD": {"symbol": "GBPUSD", "screener": "forex", "exchange": "OANDA", "name": "GBP/USD"},
+    "USDJPY": {"symbol": "USDJPY", "screener": "forex", "exchange": "OANDA", "name": "USD/JPY"},
+    "AUDUSD": {"symbol": "AUDUSD", "screener": "forex", "exchange": "OANDA", "name": "AUD/USD"},
+    "NAS100": {"symbol": "NAS100USD", "screener": "cfd", "exchange": "OANDA", "name": "NAS100"},
+    "US30": {"symbol": "US30USD", "screener": "cfd", "exchange": "OANDA", "name": "US30"},
 }
 
 TIMEFRAMES = {
@@ -422,6 +418,12 @@ def yf_symbol(pair_key):
         "XAGUSD": "SI=F",
         "BTCUSD": "BTC-USD",
         "ETHUSD": "ETH-USD",
+        "EURUSD": "EURUSD=X",
+        "GBPUSD": "GBPUSD=X",
+        "USDJPY": "JPY=X",
+        "AUDUSD": "AUDUSD=X",
+        "NAS100": "NQ=F",
+        "US30": "YM=F",
     }
     return mapping.get(pair_key, "GC=F")
 
@@ -526,268 +528,452 @@ def fetch_yfinance_data(pair_key, tf):
 # ==============================
 # MARKET ANALYSIS: CAPITAL ELITE SMC ENGINE
 # ==============================
+
+
 def get_market_analysis(pair_key, tf_key):
+    """
+    CAPITAL ELITE INSTITUTIONAL ENGINE
+    Metode utama:
+    SMC + ICT + WCO
+
+    Tidak pakai EMA/RSI sebagai dasar entry.
+    Fokus:
+    - HTF Bias H1/H4
+    - Liquidity Sweep
+    - Displacement
+    - MSS/BOS
+    - FVG
+    - Order Block
+    - OTE 62%-79%
+    - Premium/Discount
+    - WCO Spring/Upthrust
+    - Session Filter
+    """
     pair = PAIRS[pair_key]
     tf_key = str(tf_key).upper().strip()
     if tf_key not in TIMEFRAMES:
         tf_key = "M5"
 
-    cache_key = f"{pair_key}_{tf_key}"
+    cache_key = f"INSTITUTIONAL_{pair_key}_{tf_key}"
     cached_result = cache_get(cache_key)
     if cached_result:
         return cached_result
 
-    def fetch_tf(tf):
-        tv_interval = TIMEFRAMES.get(tf, "5m")
+    def fetch_candles(tf, min_rows=120):
+        if yf is None:
+            raise Exception("yfinance belum tersedia. Pastikan requirements.txt ada yfinance.")
+
+        symbol = yf_symbol(pair_key)
+        interval = yf_interval(tf)
+        period = yf_period(tf)
+
+        df = yf.download(symbol, period=period, interval=interval, progress=False, auto_adjust=False)
+
+        if df is None or df.empty or len(df) < 50:
+            raise Exception(f"Data candle {tf} belum cukup.")
 
         try:
-            handler = TA_Handler(
-                symbol=pair["symbol"],
-                screener=pair["screener"],
-                exchange=pair["exchange"],
-                interval=tv_interval
-            )
-            data = handler.get_analysis()
-            ind = data.indicators
-            summ = data.summary
+            if hasattr(df.columns, "levels"):
+                df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+        except Exception:
+            pass
 
-            price = ind.get("close")
-            open_price = ind.get("open")
-            high = ind.get("high")
-            low = ind.get("low")
-            ema20 = ind.get("EMA20")
-            ema50 = ind.get("EMA50")
-            rsi = ind.get("RSI")
-            rec = summ.get("RECOMMENDATION", "NEUTRAL")
+        return df.tail(max(min_rows, 50)).copy()
 
-            if price is None or high is None or low is None:
-                raise Exception("Data TradingView belum lengkap.")
+    def price_now(df):
+        return float(df["Close"].iloc[-1])
 
-            price = float(price)
-            open_price = float(open_price) if open_price else price
-            high = float(high)
-            low = float(low)
-            ema20 = float(ema20) if ema20 else price
-            ema50 = float(ema50) if ema50 else price
-            rsi = float(rsi) if rsi else 50.0
-            eq = (high + low) / 2
-            rng = max(abs(high - low), 0.0001)
-            candle = "BULLISH" if price > open_price else "BEARISH"
+    def candle_range(row):
+        return abs(float(row["High"]) - float(row["Low"]))
 
-            if rec in ["BUY", "STRONG_BUY"] or price > ema20 > ema50:
-                bias = "BULLISH"
-            elif rec in ["SELL", "STRONG_SELL"] or price < ema20 < ema50:
-                bias = "BEARISH"
-            else:
-                bias = "SIDEWAYS"
+    def body_size(row):
+        return abs(float(row["Close"]) - float(row["Open"]))
 
-            return {
-                "price": price, "open": open_price, "high": high, "low": low,
-                "eq": eq, "range": rng, "bias": bias, "candle": candle,
-                "rsi": rsi, "rec": rec, "ema20": ema20, "ema50": ema50,
-                "source": "TradingView"
-            }
+    def candle_direction(row):
+        return "BULLISH" if float(row["Close"]) > float(row["Open"]) else "BEARISH"
 
-        except Exception as tv_error:
-            print("TRADINGVIEW 429/FALLBACK:", tv_error)
-            return fetch_yfinance_data(pair_key, tf)
+    def swing_high_low(df, lookback=50):
+        recent = df.tail(lookback)
+        return float(recent["High"].max()), float(recent["Low"].min())
+
+    def htf_bias(df):
+        high_50, low_50 = swing_high_low(df, 50)
+        high_20, low_20 = swing_high_low(df, 20)
+        close = price_now(df)
+
+        # Price action bias, bukan indikator.
+        if high_20 > high_50 * 0.995 and close > (high_50 + low_50) / 2:
+            return "BULLISH"
+        if low_20 < low_50 * 1.005 and close < (high_50 + low_50) / 2:
+            return "BEARISH"
+
+        first = float(df["Close"].tail(30).iloc[0])
+        last = float(df["Close"].tail(30).iloc[-1])
+        if last > first:
+            return "BULLISH"
+        if last < first:
+            return "BEARISH"
+        return "SIDEWAYS"
+
+    def premium_discount(df):
+        hi, lo = swing_high_low(df, 50)
+        eq = (hi + lo) / 2
+        price = price_now(df)
+        if price < eq:
+            return "DISCOUNT", eq, hi, lo
+        if price > eq:
+            return "PREMIUM", eq, hi, lo
+        return "EQ", eq, hi, lo
+
+    def detect_liquidity_sweep(df):
+        prev = df.iloc[-31:-1]
+        last = df.iloc[-1]
+
+        prev_high = float(prev["High"].max())
+        prev_low = float(prev["Low"].min())
+        last_high = float(last["High"])
+        last_low = float(last["Low"])
+        last_close = float(last["Close"])
+        last_open = float(last["Open"])
+
+        if last_low < prev_low and last_close > prev_low and last_close > last_open:
+            return "SELLSIDE_SWEEP", last_low
+
+        if last_high > prev_high and last_close < prev_high and last_close < last_open:
+            return "BUYSIDE_SWEEP", last_high
+
+        return None, None
+
+    def detect_displacement(df, direction):
+        last = df.iloc[-1]
+        avg_range = float((df["High"].tail(20) - df["Low"].tail(20)).mean())
+        rng = candle_range(last)
+        body = body_size(last)
+        direction_now = candle_direction(last)
+
+        if direction == "BUY" and direction_now == "BULLISH" and rng >= avg_range * 1.35 and body >= rng * 0.55:
+            return True
+        if direction == "SELL" and direction_now == "BEARISH" and rng >= avg_range * 1.35 and body >= rng * 0.55:
+            return True
+        return False
+
+    def detect_mss_bos(df, direction):
+        recent = df.iloc[-21:-1]
+        last_close = float(df["Close"].iloc[-1])
+        prev_high = float(recent["High"].max())
+        prev_low = float(recent["Low"].min())
+
+        if direction == "BUY" and last_close > prev_high:
+            return "BULLISH_MSS"
+        if direction == "SELL" and last_close < prev_low:
+            return "BEARISH_MSS"
+        return None
+
+    def detect_fvg(df, direction):
+        for i in range(len(df)-1, max(2, len(df)-25), -1):
+            c0 = df.iloc[i-2]
+            c2 = df.iloc[i]
+
+            if direction == "BUY":
+                gap_low = float(c0["High"])
+                gap_high = float(c2["Low"])
+                if gap_high > gap_low:
+                    gap_size = gap_high - gap_low
+                    avg_range = float((df["High"].tail(20) - df["Low"].tail(20)).mean())
+                    if gap_size >= avg_range * 0.12:
+                        return {"type": "BULLISH_FVG", "low": gap_low, "high": gap_high, "mid": (gap_low + gap_high) / 2}
+
+            if direction == "SELL":
+                gap_low = float(c2["High"])
+                gap_high = float(c0["Low"])
+                if gap_high > gap_low:
+                    gap_size = gap_high - gap_low
+                    avg_range = float((df["High"].tail(20) - df["Low"].tail(20)).mean())
+                    if gap_size >= avg_range * 0.12:
+                        return {"type": "BEARISH_FVG", "low": gap_low, "high": gap_high, "mid": (gap_low + gap_high) / 2}
+
+        return None
+
+    def detect_order_block(df, direction):
+        candles = df.tail(25)
+        avg_range = float((candles["High"] - candles["Low"]).mean())
+
+        for i in range(len(candles)-3, 3, -1):
+            c = candles.iloc[i]
+            nxt = candles.iloc[i+1]
+
+            c_dir = candle_direction(c)
+            nxt_dir = candle_direction(nxt)
+            nxt_range = candle_range(nxt)
+
+            if direction == "BUY" and c_dir == "BEARISH" and nxt_dir == "BULLISH" and nxt_range >= avg_range * 1.15:
+                return {"type": "BULLISH_OB", "low": float(c["Low"]), "high": float(c["Open"]), "mid": (float(c["Low"]) + float(c["Open"])) / 2}
+
+            if direction == "SELL" and c_dir == "BULLISH" and nxt_dir == "BEARISH" and nxt_range >= avg_range * 1.15:
+                return {"type": "BEARISH_OB", "low": float(c["Open"]), "high": float(c["High"]), "mid": (float(c["Open"]) + float(c["High"])) / 2}
+
+        return None
+
+    def detect_ote(df, direction):
+        hi, lo = swing_high_low(df, 40)
+        rng = max(hi - lo, 0.0001)
+
+        if direction == "BUY":
+            ote_high = hi - rng * 0.62
+            ote_low = hi - rng * 0.79
+            return {"low": min(ote_low, ote_high), "high": max(ote_low, ote_high), "mid": (ote_low + ote_high) / 2}
+
+        ote_low = lo + rng * 0.62
+        ote_high = lo + rng * 0.79
+        return {"low": min(ote_low, ote_high), "high": max(ote_low, ote_high), "mid": (ote_low + ote_high) / 2}
+
+    def detect_wco(df):
+        # WCO sederhana:
+        # Spring = sweep low lalu close balik di atas range low.
+        # Upthrust = sweep high lalu close balik di bawah range high.
+        prev = df.iloc[-31:-1]
+        last = df.iloc[-1]
+        prev_high = float(prev["High"].max())
+        prev_low = float(prev["Low"].min())
+        close = float(last["Close"])
+        low = float(last["Low"])
+        high = float(last["High"])
+
+        if low < prev_low and close > prev_low:
+            return "SPRING"
+        if high > prev_high and close < prev_high:
+            return "UPTHRUST"
+        return None
+
+    def overlap_zone(*zones):
+        valid = [z for z in zones if z]
+        if not valid:
+            return None
+
+        low = max(float(z["low"]) for z in valid)
+        high = min(float(z["high"]) for z in valid)
+
+        if high > low:
+            return {"low": low, "high": high, "mid": (low + high) / 2, "type": "OVERLAP"}
+
+        # Kalau tidak overlap, pilih FVG dulu, lalu OB, lalu OTE.
+        return valid[0]
 
     try:
-        tf_data = fetch_tf(tf_key)
-        pytime.sleep(1.2)
-        h1 = fetch_tf("H1") if tf_key != "H1" else tf_data
-        pytime.sleep(1.2)
-        m15 = fetch_tf("M15") if tf_key != "M15" else tf_data
-        pytime.sleep(1.2)
-        m5 = fetch_tf("M5") if tf_key != "M5" else tf_data
+        df_m1 = fetch_candles("M1", 150)
+        pytime.sleep(0.4)
+        df_m5 = fetch_candles("M5", 150)
+        pytime.sleep(0.4)
+        df_m15 = fetch_candles("M15", 150)
+        pytime.sleep(0.4)
+        df_h1 = fetch_candles("H1", 150)
+        pytime.sleep(0.4)
+        df_h4 = fetch_candles("H4", 150)
     except Exception as e:
         return f"""
 👑 <b>CAPITAL ELITE PROJECT</b>
-<code>Market Intelligence System</code>
 
 📡 <b>Market Data Sync</b>
-Sistem sedang validasi data market terbaru.
+Data candle belum stabil / provider lagi limit.
 
 Detail:
-<code>{type(e).__name__}: {str(e)[:180]}</code>
+<code>{type(e).__name__}: {str(e)[:160]}</code>
 
-🔄 Coba klik ulang 30-60 detik lagi.
-⚠️ Not Financial Advice
-"""
-
-    price = tf_data["price"]
-    market_range = tf_data["range"]
-    h1_bias = h1["bias"]
-    m15_bias = m15["bias"]
-    m5_bias = m5["bias"]
-    data_source = tf_data.get("source", "Market Data")
-
-    wib_now = datetime.utcnow() + timedelta(hours=7)
-    hour = wib_now.hour
-    if 5 <= hour < 14:
-        session_tag = "Asia Session"
-        session_score = 4
-        session_note = "Volatilitas biasanya lebih kalem. Utamakan sniper/retest."
-    elif 14 <= hour < 20:
-        session_tag = "London Session"
-        session_score = 10
-        session_note = "Volume mulai naik. Setup valid lebih enak dieksekusi."
-    else:
-        session_tag = "New York Session"
-        session_score = 10
-        session_note = "Volatilitas tinggi. Wajib jaga lot dan disiplin SL."
-
-    htf_bull = h1_bias == "BULLISH"
-    htf_bear = h1_bias == "BEARISH"
-    setup_bull = m15_bias in ["BULLISH", "SIDEWAYS"]
-    setup_bear = m15_bias in ["BEARISH", "SIDEWAYS"]
-
-    in_discount = price <= m15["eq"]
-    in_premium = price >= m15["eq"]
-    sell_side_swept = (m5["low"] <= m15["low"]) or (price <= m5["eq"])
-    buy_side_swept = (m5["high"] >= m15["high"]) or (price >= m5["eq"])
-    bullish_mss = (m5["candle"] == "BULLISH") or (price > m5["ema20"])
-    bearish_mss = (m5["candle"] == "BEARISH") or (price < m5["ema20"])
-
-    buy_score = 0
-    sell_score = 0
-    if htf_bull: buy_score += 28
-    if htf_bear: sell_score += 28
-    if setup_bull: buy_score += 18
-    if setup_bear: sell_score += 18
-    if in_discount: buy_score += 15
-    if in_premium: sell_score += 15
-    if sell_side_swept: buy_score += 12
-    if buy_side_swept: sell_score += 12
-    if bullish_mss: buy_score += 12
-    if bearish_mss: sell_score += 12
-    buy_score += session_score
-    sell_score += session_score
-
-    signal = "BUY" if buy_score >= sell_score else "SELL"
-    raw_score = buy_score if signal == "BUY" else sell_score
-    confidence = min(max(raw_score, 45), 96)
-    score_gap = abs(buy_score - sell_score)
-    true_no_setup = confidence < 60 or score_gap < 8
-
-    if confidence >= 88:
-        grade = "A+"
-        setup_type = "💎 INSTITUTIONAL SETUP"
-        risk_level = "LOW"
-    elif confidence >= 78:
-        grade = "A"
-        setup_type = "🚀 SNIPER SETUP"
-        risk_level = "MEDIUM"
-    elif confidence >= 65:
-        grade = "B"
-        setup_type = "🟡 RETEST SETUP"
-        risk_level = "MEDIUM-HIGH"
-    else:
-        grade = "C"
-        setup_type = "⚪ WAIT / NO SETUP"
-        risk_level = "HIGH"
-
-    if pair_key == "XAUUSD":
-        sl_dist = max(3.0, min(market_range * 0.85, 6.0))
-    elif pair_key == "XAGUSD":
-        sl_dist = max(0.12, min(market_range * 0.85, 0.28))
-    elif pair_key == "BTCUSD":
-        sl_dist = max(120, min(market_range * 0.85, 350))
-    else:
-        sl_dist = max(10, min(market_range * 0.85, 40))
-
-    if signal == "BUY":
-        aggressive_low = price - (sl_dist * 0.15)
-        aggressive_high = price + (sl_dist * 0.08)
-        sniper_low = min(price, m15["eq"]) - (sl_dist * 0.35)
-        sniper_high = min(price, m15["eq"]) - (sl_dist * 0.10)
-        sl = min(m5["low"], m15["low"], sniper_low - (sl_dist * 0.55))
-        tp1 = price + (sl_dist * 1.1)
-        tp2 = price + (sl_dist * 2.0)
-        tp3 = price + (sl_dist * 3.0)
-        signal_label = "🟢 BUY PLAN"
-        action_bias = "BUY ONLY"
-        poi_label = "Discount POI"
-        sweep_label = "Sell-side liquidity sweep"
-        mss_label = "Bullish trigger / recovery"
-        invalid_text = "Invalid kalau low POI jebol kuat dan candle close bearish."
-    else:
-        aggressive_low = price - (sl_dist * 0.08)
-        aggressive_high = price + (sl_dist * 0.15)
-        sniper_low = max(price, m15["eq"]) + (sl_dist * 0.10)
-        sniper_high = max(price, m15["eq"]) + (sl_dist * 0.35)
-        sl = max(m5["high"], m15["high"], sniper_high + (sl_dist * 0.55))
-        tp1 = price - (sl_dist * 1.1)
-        tp2 = price - (sl_dist * 2.0)
-        tp3 = price - (sl_dist * 3.0)
-        signal_label = "🔴 SELL PLAN"
-        action_bias = "SELL ONLY"
-        poi_label = "Premium POI"
-        sweep_label = "Buy-side liquidity sweep"
-        mss_label = "Bearish trigger / rejection"
-        invalid_text = "Invalid kalau high POI jebol kuat dan candle close bullish."
-
-    confidence_bar = conf_bar(confidence)
-    entry_mid = (aggressive_low + aggressive_high) / 2
-    recent_entry = fmt(price)
-    rr = round(abs(tp2 - entry_mid) / max(abs(entry_mid - sl), 0.0001), 1)
-
-    if true_no_setup:
-        return f"""
-👑 <b>CAPITAL ELITE INTELLIGENCE</b>
-<code>SMC Signal Desk</code>
-
-💱 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
-⚪ <b>NO TRADE ZONE</b>
-
-📊 <b>Market Status</b>
-H1: <b>{h1_bias}</b>
-M15: <b>{m15_bias}</b>
-M5: <b>{m5_bias}</b>
-
-⭐ <b>Setup Grade</b>: <b>{grade}</b>
-🔥 <b>Confidence</b>: <b>{confidence}%</b>
-{confidence_bar}
-⚠️ <b>Risk Level</b>: <b>{risk_level}</b>
-
-🧠 <b>Elite Note</b>
-Market belum kasih edge bersih. Jangan maksa entry kalau confluence belum kuat.
-
-🛡️ <b>Small Account Rule</b>
-Better miss than MC. Tunggu setup lebih clean.
-
+🔄 Coba ulang 30-60 detik lagi.
 {disclaimer_footer()}
 """
 
-    result_text = f"""
-🎯 <b>CAPITAL ELITE SIGNAL</b>
+    price = price_now(df_m5)
+    h1_bias = htf_bias(df_h1)
+    h4_bias = htf_bias(df_h4)
+    m15_bias = htf_bias(df_m15)
+    m5_bias = htf_bias(df_m5)
+    location, eq, range_high, range_low = premium_discount(df_h1)
+
+    now_wib = wib_now()
+    hour = now_wib.hour
+    if 5 <= hour < 14:
+        session_tag = "Asia"
+        session_score = 3
+        killzone = False
+    elif 14 <= hour < 20:
+        session_tag = "London"
+        session_score = 10
+        killzone = True
+    else:
+        session_tag = "New York"
+        session_score = 10
+        killzone = True
+
+    buy_base = 0
+    sell_base = 0
+
+    if h4_bias == "BULLISH": buy_base += 10
+    if h4_bias == "BEARISH": sell_base += 10
+    if h1_bias == "BULLISH": buy_base += 15
+    if h1_bias == "BEARISH": sell_base += 15
+    if m15_bias == "BULLISH": buy_base += 8
+    if m15_bias == "BEARISH": sell_base += 8
+    if location == "DISCOUNT": buy_base += 10
+    if location == "PREMIUM": sell_base += 10
+
+    direction = "BUY" if buy_base >= sell_base else "SELL"
+
+    sweep, sweep_price = detect_liquidity_sweep(df_m15)
+    wco = detect_wco(df_m15)
+    displacement = detect_displacement(df_m15, direction)
+    mss = detect_mss_bos(df_m15, direction)
+    fvg = detect_fvg(df_m5, direction)
+    ob = detect_order_block(df_m5, direction)
+    ote = detect_ote(df_m15, direction)
+
+    score = 0
+    reasons = []
+
+    if direction == "BUY":
+        if h4_bias == "BULLISH" and h1_bias == "BULLISH":
+            score += 20; reasons.append("HTF bullish")
+        elif h1_bias == "BULLISH":
+            score += 12; reasons.append("H1 bullish")
+        if sweep == "SELLSIDE_SWEEP":
+            score += 15; reasons.append("Sell-side sweep")
+        if wco == "SPRING":
+            score += 10; reasons.append("WCO Spring")
+        if location == "DISCOUNT":
+            score += 10; reasons.append("Discount zone")
+    else:
+        if h4_bias == "BEARISH" and h1_bias == "BEARISH":
+            score += 20; reasons.append("HTF bearish")
+        elif h1_bias == "BEARISH":
+            score += 12; reasons.append("H1 bearish")
+        if sweep == "BUYSIDE_SWEEP":
+            score += 15; reasons.append("Buy-side sweep")
+        if wco == "UPTHRUST":
+            score += 10; reasons.append("WCO Upthrust")
+        if location == "PREMIUM":
+            score += 10; reasons.append("Premium zone")
+
+    if displacement:
+        score += 15; reasons.append("Displacement")
+    if mss:
+        score += 15; reasons.append("MSS/BOS")
+    if fvg:
+        score += 10; reasons.append("FVG")
+    if ob:
+        score += 10; reasons.append("Order Block")
+    if ote:
+        score += 5; reasons.append("OTE")
+    if killzone:
+        score += session_score; reasons.append(f"{session_tag} killzone")
+
+    zone = overlap_zone(fvg, ob, ote)
+    zone_name = "FVG/OB/OTE" if zone else "N/A"
+
+    invalid = []
+    if score < 80:
+        invalid.append("Score belum masuk high probability")
+    if not sweep:
+        invalid.append("Belum ada liquidity sweep valid")
+    if not displacement:
+        invalid.append("Belum ada displacement kuat")
+    if not mss:
+        invalid.append("Belum ada MSS/BOS valid")
+    if not fvg and not ob:
+        invalid.append("Belum ada FVG/OB valid")
+    if direction == "BUY" and location != "DISCOUNT" and h4_bias != "BULLISH":
+        invalid.append("BUY belum ideal di discount/HTF bullish")
+    if direction == "SELL" and location != "PREMIUM" and h4_bias != "BEARISH":
+        invalid.append("SELL belum ideal di premium/HTF bearish")
+
+    if invalid:
+        invalid_text = "\n".join([f"• {x}" for x in invalid[:5]])
+        result = f"""
+⚪ <b>CAPITAL ELITE NO TRADE</b>
 
 💰 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
-📡 <code>{data_source}</code>
+📍 Price: <code>{fmt(price)}</code>
 
-<b>{signal_label}</b>
-📊 Score: <b>{confidence}/100</b> | RR 1:{rr}
+📊 Score: <b>{min(score, 99)}/100</b>
+🧭 Bias: <b>{direction}</b>
 
-📍 Entry: <code>{fmt(aggressive_low)} - {fmt(aggressive_high)}</code>
-💎 Sniper: <code>{fmt(sniper_low)} - {fmt(sniper_high)}</code>
-📌 Recent Entry: <code>{recent_entry}</code>
+📈 H4: <b>{h4_bias}</b> | H1: <b>{h1_bias}</b>
+📈 M15: <b>{m15_bias}</b> | M5: <b>{m5_bias}</b>
+
+{invalid_text}
+
+Rule:
+SMC + ICT + WCO belum lengkap.
+Tunggu sweep + displacement + MSS + FVG/OB.
+
+{disclaimer_footer()}
+"""
+        cache_set(cache_key, result)
+        return result
+
+    entry_low = float(zone["low"])
+    entry_high = float(zone["high"])
+    zone_mid = float(zone["mid"])
+
+    atr_like = float((df_m5["High"].tail(20) - df_m5["Low"].tail(20)).mean())
+    recent_entry = fmt(price)
+
+    # Area terlalu jauh dari harga = jangan dipaksa.
+    max_dist = max(atr_like * 2.2, 1.2 if pair_key == "XAUUSD" else 0.001)
+    if abs(zone_mid - price) > max_dist:
+        result = f"""
+⚪ <b>CAPITAL ELITE NO TRADE</b>
+
+💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
+📍 Price: <code>{fmt(price)}</code>
+📊 Score: <b>{min(score, 99)}/100</b>
+
+POI valid tapi terlalu jauh dari harga sekarang.
+Tunggu retrace mendekati zone.
+
+{disclaimer_footer()}
+"""
+        cache_set(cache_key, result)
+        return result
+
+    if direction == "BUY":
+        sl = min(float(df_m15["Low"].tail(30).min()), entry_low) - atr_like * 0.8
+        risk = max(entry_high - sl, 0.0001)
+        tp1 = entry_high + risk * 1.2
+        tp2 = entry_high + risk * 2.0
+        tp3 = max(float(df_m15["High"].tail(50).max()), entry_high + risk * 2.5)
+        label = "🟢 STRONG BUY"
+    else:
+        sl = max(float(df_m15["High"].tail(30).max()), entry_high) + atr_like * 0.8
+        risk = max(sl - entry_low, 0.0001)
+        tp1 = entry_low - risk * 1.2
+        tp2 = entry_low - risk * 2.0
+        tp3 = min(float(df_m15["Low"].tail(50).min()), entry_low - risk * 2.5)
+        label = "🔴 STRONG SELL"
+
+    grade = "ELITE S+" if score >= 95 else "A+" if score >= 90 else "A"
+    reason_text = " | ".join(reasons[:6])
+
+    result_text = f"""
+🎯 <b>CAPITAL ELITE ICT PRO</b>
+
+💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
+{label}
+📊 Score: <b>{min(score, 99)}/100</b> | <b>{grade}</b>
+
+📍 Entry: <code>{fmt(entry_low)} - {fmt(entry_high)}</code>
+📌 Recent: <code>{recent_entry}</code>
+🧩 Zone: <b>{zone_name}</b>
 
 🛑 SL: <code>{fmt(sl)}</code>
 🎯 TP1: <code>{fmt(tp1)}</code>
 🎯 TP2: <code>{fmt(tp2)}</code>
 🎯 TP3: <code>{fmt(tp3)}</code>
 
-📈 H1: <b>{h1_bias}</b> | M15: <b>{m15_bias}</b>
-📈 M5: <b>{m5_bias}</b>
+✅ {reason_text}
 
-🏆 Grade: <b>{grade}</b>
-🔥 Confidence: <b>{confidence}%</b>
-🧭 Bias: <b>{action_bias}</b>
-
-⚠️ Tunggu candle konfirmasi sebelum entry.
+⚠️ Tunggu konfirmasi candle M1/M5.
 {disclaimer_footer()}
 """
-
     cache_set(cache_key, result_text)
     return result_text
 
@@ -1008,11 +1194,11 @@ Pilih fitur di bawah dan ikuti setup dengan disiplin.
 """
 
     keyboard = [
-        [InlineKeyboardButton("📊 Scan Market", callback_data="menu_pairs")],
+        [InlineKeyboardButton("📊 Market Analysis", callback_data="menu_market")],
         [InlineKeyboardButton("🎯 Sniper Scanner", callback_data="sniper_menu")],
         [InlineKeyboardButton("📰 News Desk", callback_data="menu_news")],
-        [InlineKeyboardButton("👤 Akun", callback_data="account")],
-        [InlineKeyboardButton("💎 Upgrade", callback_data="upgrade")],
+        [InlineKeyboardButton("👤 Account", callback_data="account")],
+        [InlineKeyboardButton("💎 Premium", callback_data="upgrade")],
     ]
     return text, InlineKeyboardMarkup(keyboard)
 
@@ -1032,38 +1218,54 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = get_user(user_id)
     data = q.data
 
-    if data == "menu_pairs":
+    if data in ["menu_market", "menu_pairs"]:
         if not can_use_market(user_id):
             await q.edit_message_text(
-                "🚫 <b>FREE TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses unlimited.",
+                "🔒 <b>FREE TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses unlimited.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Upgrade Premium", callback_data="upgrade")]]),
                 parse_mode="HTML"
             )
             return
         keyboard = [
-            [InlineKeyboardButton("🥇 XAU/USD", callback_data="pair_XAUUSD"), InlineKeyboardButton("🥈 XAG/USD", callback_data="pair_XAGUSD")],
-            [InlineKeyboardButton("₿ BTC/USD", callback_data="pair_BTCUSD"), InlineKeyboardButton("♦ ETH/USD", callback_data="pair_ETHUSD")],
-            [InlineKeyboardButton("⬅️ Kembali", callback_data="back_start")]
+            [InlineKeyboardButton("🥇 Metals", callback_data="cat_metals"), InlineKeyboardButton("₿ Crypto", callback_data="cat_crypto")],
+            [InlineKeyboardButton("💱 Forex", callback_data="cat_forex"), InlineKeyboardButton("📈 Indices", callback_data="cat_indices")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="back_start")]
         ]
-        await q.edit_message_text("🏆 <b>Kategori: Komoditas & Crypto</b>\n\nPilih pair:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        await q.edit_message_text("📊 <b>CAPITAL ELITE MARKET ANALYSIS</b>\n\nPilih kategori market:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+    elif data.startswith("cat_"):
+        category = data.replace("cat_", "")
+        if category == "metals":
+            title = "🥇 Metals"
+            keyboard = [[InlineKeyboardButton("🥇 XAU/USD", callback_data="pair_XAUUSD"), InlineKeyboardButton("🥈 XAG/USD", callback_data="pair_XAGUSD")],[InlineKeyboardButton("⬅️ Back", callback_data="menu_market")]]
+        elif category == "crypto":
+            title = "₿ Crypto"
+            keyboard = [[InlineKeyboardButton("₿ BTC/USD", callback_data="pair_BTCUSD"), InlineKeyboardButton("♦ ETH/USD", callback_data="pair_ETHUSD")],[InlineKeyboardButton("⬅️ Back", callback_data="menu_market")]]
+        elif category == "forex":
+            title = "💱 Forex"
+            keyboard = [[InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="pair_EURUSD"), InlineKeyboardButton("🇬🇧 GBP/USD", callback_data="pair_GBPUSD")],[InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="pair_USDJPY"), InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="pair_AUDUSD")],[InlineKeyboardButton("⬅️ Back", callback_data="menu_market")]]
+        else:
+            title = "📈 Indices"
+            keyboard = [[InlineKeyboardButton("📈 NAS100", callback_data="pair_NAS100"), InlineKeyboardButton("🏛️ US30", callback_data="pair_US30")],[InlineKeyboardButton("⬅️ Back", callback_data="menu_market")]]
+        await q.edit_message_text(f"{title}\n\nPilih pair/market:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data.startswith("pair_"):
         pair_key = data.replace("pair_", "")
         keyboard = [
-            [InlineKeyboardButton("M1", callback_data=f"tf_{pair_key}_M1"), InlineKeyboardButton("M3", callback_data=f"tf_{pair_key}_M3"), InlineKeyboardButton("M5", callback_data=f"tf_{pair_key}_M5")],
-            [InlineKeyboardButton("M15", callback_data=f"tf_{pair_key}_M15"), InlineKeyboardButton("M30", callback_data=f"tf_{pair_key}_M30"), InlineKeyboardButton("H1", callback_data=f"tf_{pair_key}_H1")],
-            [InlineKeyboardButton("H4", callback_data=f"tf_{pair_key}_H4"), InlineKeyboardButton("DAILY", callback_data=f"tf_{pair_key}_DAILY")],
-            [InlineKeyboardButton("⬅️ Kembali", callback_data="menu_pairs")]
+            [InlineKeyboardButton("M1", callback_data=f"tf_{pair_key}_M1"), InlineKeyboardButton("M5", callback_data=f"tf_{pair_key}_M5"), InlineKeyboardButton("M15", callback_data=f"tf_{pair_key}_M15")],
+            [InlineKeyboardButton("M30", callback_data=f"tf_{pair_key}_M30"), InlineKeyboardButton("H1", callback_data=f"tf_{pair_key}_H1"), InlineKeyboardButton("H4", callback_data=f"tf_{pair_key}_H4")],
+            [InlineKeyboardButton("DAILY", callback_data=f"tf_{pair_key}_DAILY")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="menu_market")]
         ]
-        await q.edit_message_text(f"💱 <b>{PAIRS[pair_key]['name']}</b>\n\nPilih timeframe:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        await q.edit_message_text(f"💰 <b>{PAIRS[pair_key]['name']}</b>\n\nPilih timeframe analisa:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data.startswith("tf_"):
         if not can_use_market(user_id):
-            await q.edit_message_text("🚫 <b>FREE TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses unlimited.", parse_mode="HTML")
+            await q.edit_message_text("🔒 <b>FREE TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses unlimited.", parse_mode="HTML")
             return
         parts = data.split("_")
         pair_key, tf_key = parts[1], parts[2]
-        await q.edit_message_text("🔍 Scanning liquidity...\n⚡ Validating POI...\n🧠 Building setup...")
+        await q.edit_message_text(f"🔍 <b>Scanning {PAIRS[pair_key]['name']}</b>\nTF: <b>{tf_key}</b>\n\nValidating Hybrid Entry Engine...", parse_mode="HTML")
         try:
             hasil = get_market_analysis(pair_key, tf_key)
             add_market_usage(user_id)
@@ -1071,22 +1273,14 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not user["premium"]:
                 hasil += f"\n\n🆓 Sisa trial market: {TRIAL_LIMIT_MARKET - user['market_used']} analisa"
         except Exception as e:
-            hasil = f"""
-👑 <b>CAPITAL ELITE PROJECT</b>
-
-📡 <b>Market Data Sync</b>
-Sistem sedang validasi data market terbaru.
-
-Detail:
-<code>{type(e).__name__}: {str(e)[:160]}</code>
-
-🔄 Coba klik ulang 30-60 detik lagi.
-
-⚠️ <b>Not Financial Advice</b>
-Trading memiliki risiko tinggi.
-"""
-        keyboard = [[InlineKeyboardButton("🔁 Analisa Lagi", callback_data=f"pair_{pair_key}")], [InlineKeyboardButton("🏠 Menu Utama", callback_data="back_start")]]
+            hasil = f"""👑 <b>CAPITAL ELITE PROJECT</b>\n\n📡 <b>Market Data Sync</b>\nSistem sedang validasi data market terbaru.\n\nDetail:\n<code>{type(e).__name__}: {str(e)[:160]}</code>\n\n🔄 Coba klik ulang 30-60 detik lagi.\n\n⚠️ <b>Not Financial Advice</b>\nTrading memiliki risiko tinggi."""
+        keyboard = [
+            [InlineKeyboardButton("🔄 Refresh", callback_data=f"tf_{pair_key}_{tf_key}")],
+            [InlineKeyboardButton("⏱️ Ganti TF", callback_data=f"pair_{pair_key}"), InlineKeyboardButton("📊 Market", callback_data="menu_market")],
+            [InlineKeyboardButton("🏠 Home", callback_data="back_start")]
+        ]
         await q.edit_message_text(hasil, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
 
     elif data == "sniper_menu":
         if not can_use_market(user_id):
@@ -1097,10 +1291,12 @@ Trading memiliki risiko tinggi.
             )
             return
         keyboard = [
-            [InlineKeyboardButton("🎯 Scan XAUUSD", callback_data="sniper_XAUUSD")],
-            [InlineKeyboardButton("🎯 Scan BTCUSD", callback_data="sniper_BTCUSD")],
-            [InlineKeyboardButton("🎯 Scan ETHUSD", callback_data="sniper_ETHUSD")],
-            [InlineKeyboardButton("⬅️ Kembali", callback_data="back_start")]
+            [InlineKeyboardButton("🥇 XAU", callback_data="sniper_XAUUSD"), InlineKeyboardButton("🥈 XAG", callback_data="sniper_XAGUSD")],
+            [InlineKeyboardButton("₿ BTC", callback_data="sniper_BTCUSD"), InlineKeyboardButton("♦ ETH", callback_data="sniper_ETHUSD")],
+            [InlineKeyboardButton("🇪🇺 EUR", callback_data="sniper_EURUSD"), InlineKeyboardButton("🇬🇧 GBP", callback_data="sniper_GBPUSD")],
+            [InlineKeyboardButton("🇯🇵 JPY", callback_data="sniper_USDJPY"), InlineKeyboardButton("🇦🇺 AUD", callback_data="sniper_AUDUSD")],
+            [InlineKeyboardButton("📈 NAS100", callback_data="sniper_NAS100"), InlineKeyboardButton("🏛️ US30", callback_data="sniper_US30")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="back_start")]
         ]
         await q.edit_message_text(
             "🎯 <b>CAPITAL ELITE SNIPER SCANNER</b>\n\nScan multi-timeframe M1 • M5 • M15 • H1 untuk cari confluence.",
@@ -1273,13 +1469,13 @@ Trial News: <b>{news_left}</b>
 ⚜ <b>MEMBERSHIP PLANS</b>
 
 💎 <b>ELITE ACCESS — 60 HARI</b>
-<s>Rp 499.000</s> 🔥 <b>Rp 150.000</b>
+<s>Rp 499.000</s> 🔥 <b>Rp 299.000</b>
 
 👑 <b>VIP ACCESS — 90 HARI</b>
-<b>Rp 250.000</b>
+<b>Rp 399.000</b>
 
 ♾️ <b>LIFETIME ACCESS</b>
-<b>Rp 499.000</b>
+<b>Rp 1.999.000</b>
 
 ✅ Premium Signal
 ✅ Auto Signal Broadcast
@@ -1374,7 +1570,11 @@ async def eth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def extract_confidence_from_text(text):
-    m = re.search(r"Confidence\s*</b>\s*<b>(\d+)%", text)
+    m = re.search(r"Score:\s*</b>\s*<b>(\d+)/100", text)
+    if not m:
+        m = re.search(r"Score:\s*<b>(\d+)/100", text)
+    if not m:
+        m = re.search(r"Confidence\s*</b>\s*<b>(\d+)%", text)
     if not m:
         m = re.search(r"Confidence\s*[: ]+\s*(\d+)%", text, re.I)
     if not m:
@@ -1386,12 +1586,12 @@ def extract_confidence_from_text(text):
 
 
 def extract_direction_from_text(text):
-    if "BUY SETUP" in text or "🟢" in text:
-        return "BUY"
-    if "SELL SETUP" in text or "🔴" in text:
-        return "SELL"
-    if "NO SETUP" in text:
+    if "NO TRADE" in text or "NO SETUP" in text:
         return "NO SETUP"
+    if "STRONG BUY" in text or "BUY PLAN" in text or "🟢" in text:
+        return "BUY"
+    if "STRONG SELL" in text or "SELL PLAN" in text or "🔴" in text:
+        return "SELL"
     return "MIXED"
 
 
