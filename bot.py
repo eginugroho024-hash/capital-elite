@@ -21,6 +21,7 @@ import os
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 ADMIN_ID = 7889334774  # ganti kalau ID admin lu beda
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
+TD_API_KEY = os.environ.get("TD_API_KEY", "")
 USER_FILE = "users.json"
 NEWS_SENT_FILE = "news_sent.json"
 SIGNAL_LOG_FILE = "signal_log.json"
@@ -412,34 +413,44 @@ def cache_set(key, value):
     }
 
 
-def yf_symbol(pair_key):
+def td_symbol(pair_key):
     mapping = {
-        "XAUUSD": "GC=F",
-        "XAGUSD": "SI=F",
-        "BTCUSD": "BTC-USD",
-        "ETHUSD": "ETH-USD",
-        "EURUSD": "EURUSD=X",
-        "GBPUSD": "GBPUSD=X",
-        "USDJPY": "JPY=X",
-        "AUDUSD": "AUDUSD=X",
-        "NAS100": "NQ=F",
-        "US30": "YM=F",
+        "XAUUSD": "XAU/USD",
+        "XAGUSD": "XAG/USD",
+        "BTCUSD": "BTC/USD",
+        "ETHUSD": "ETH/USD",
+        "EURUSD": "EUR/USD",
+        "GBPUSD": "GBP/USD",
+        "USDJPY": "USD/JPY",
+        "AUDUSD": "AUD/USD",
+        "NAS100": "NAS100",
+        "US30": "DJI",
     }
-    return mapping.get(pair_key, "GC=F")
+    return mapping.get(pair_key, "XAU/USD")
+
+
+def yf_symbol(pair_key):
+    # Legacy compatibility
+    return td_symbol(pair_key)
+
+
+def td_interval(tf):
+    mapping = {
+        "M1": "1min",
+        "M3": "1min",
+        "M5": "5min",
+        "M15": "15min",
+        "M30": "30min",
+        "H1": "1h",
+        "H4": "4h",
+        "DAILY": "1day",
+    }
+    return mapping.get(tf, "5min")
 
 
 def yf_interval(tf):
-    mapping = {
-        "M1": "1m",
-        "M3": "5m",
-        "M5": "5m",
-        "M15": "15m",
-        "M30": "30m",
-        "H1": "60m",
-        "H4": "60m",
-        "DAILY": "1d",
-    }
-    return mapping.get(tf, "5m")
+    # Legacy compatibility
+    return td_interval(tf)
 
 
 def yf_period(tf):
@@ -530,107 +541,139 @@ def fetch_yfinance_data(pair_key, tf):
 # ==============================
 
 
+
+# ==============================
+# TWELVEDATA MARKET DATA
+# ==============================
+def fetch_twelvedata_candles(pair_key, tf, outputsize=180):
+    if not TD_API_KEY:
+        raise Exception("TD_API_KEY belum diisi di Railway Variables.")
+
+    symbol = td_symbol(pair_key)
+    interval = td_interval(tf)
+
+    url = "https://api.twelvedata.com/time_series"
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "outputsize": outputsize,
+        "apikey": TD_API_KEY,
+        "format": "JSON",
+        "timezone": "Asia/Jakarta"
+    }
+
+    r = requests.get(url, params=params, timeout=15)
+    data = r.json()
+
+    if data.get("status") == "error":
+        raise Exception(data.get("message", "TwelveData error"))
+
+    values = data.get("values")
+    if not values:
+        raise Exception("TwelveData tidak mengembalikan candle values.")
+
+    candles = []
+    for item in values:
+        try:
+            candles.append({
+                "datetime": item.get("datetime"),
+                "Open": float(item["open"]),
+                "High": float(item["high"]),
+                "Low": float(item["low"]),
+                "Close": float(item["close"]),
+            })
+        except Exception:
+            continue
+
+    if len(candles) < 30:
+        raise Exception("Candle TwelveData belum cukup.")
+
+    candles = list(reversed(candles))
+    return candles
+
+
+def candle_col(candles, key):
+    return [float(c[key]) for c in candles]
+
+
+def last_candle(candles):
+    return candles[-1]
+
+
+def candles_tail(candles, n):
+    return candles[-n:] if len(candles) >= n else candles
+
+
+
 def get_market_analysis(pair_key, tf_key):
     """
     CAPITAL ELITE INSTITUTIONAL ENGINE
-    Metode utama:
-    SMC + ICT + WCO
-
-    Tidak pakai EMA/RSI sebagai dasar entry.
-    Fokus:
-    - HTF Bias H1/H4
-    - Liquidity Sweep
-    - Displacement
-    - MSS/BOS
-    - FVG
-    - Order Block
-    - OTE 62%-79%
-    - Premium/Discount
-    - WCO Spring/Upthrust
-    - Session Filter
+    Source data: TwelveData Spot/FX/Crypto/Index.
+    Metode utama: SMC + ICT + WCO tanpa EMA/RSI.
     """
     pair = PAIRS[pair_key]
     tf_key = str(tf_key).upper().strip()
     if tf_key not in TIMEFRAMES:
         tf_key = "M5"
 
-    cache_key = f"INSTITUTIONAL_{pair_key}_{tf_key}"
+    cache_key = f"TD_INSTITUTIONAL_{pair_key}_{tf_key}"
     cached_result = cache_get(cache_key)
     if cached_result:
         return cached_result
 
-    def fetch_candles(tf, min_rows=120):
-        if yf is None:
-            raise Exception("yfinance belum tersedia. Pastikan requirements.txt ada yfinance.")
+    def price_now(candles):
+        return float(candles[-1]["Close"])
 
-        symbol = yf_symbol(pair_key)
-        interval = yf_interval(tf)
-        period = yf_period(tf)
+    def candle_range(c):
+        return abs(float(c["High"]) - float(c["Low"]))
 
-        df = yf.download(symbol, period=period, interval=interval, progress=False, auto_adjust=False)
+    def body_size(c):
+        return abs(float(c["Close"]) - float(c["Open"]))
 
-        if df is None or df.empty or len(df) < 50:
-            raise Exception(f"Data candle {tf} belum cukup.")
+    def candle_direction(c):
+        return "BULLISH" if float(c["Close"]) > float(c["Open"]) else "BEARISH"
 
-        try:
-            if hasattr(df.columns, "levels"):
-                df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-        except Exception:
-            pass
+    def swing_high_low(candles, lookback=50):
+        recent = candles_tail(candles, lookback)
+        return max(candle_col(recent, "High")), min(candle_col(recent, "Low"))
 
-        return df.tail(max(min_rows, 50)).copy()
+    def htf_bias(candles):
+        hi50, lo50 = swing_high_low(candles, 50)
+        hi20, lo20 = swing_high_low(candles, 20)
+        close = price_now(candles)
+        eq = (hi50 + lo50) / 2
 
-    def price_now(df):
-        return float(df["Close"].iloc[-1])
+        first = float(candles_tail(candles, 30)[0]["Close"])
+        last = close
 
-    def candle_range(row):
-        return abs(float(row["High"]) - float(row["Low"]))
-
-    def body_size(row):
-        return abs(float(row["Close"]) - float(row["Open"]))
-
-    def candle_direction(row):
-        return "BULLISH" if float(row["Close"]) > float(row["Open"]) else "BEARISH"
-
-    def swing_high_low(df, lookback=50):
-        recent = df.tail(lookback)
-        return float(recent["High"].max()), float(recent["Low"].min())
-
-    def htf_bias(df):
-        high_50, low_50 = swing_high_low(df, 50)
-        high_20, low_20 = swing_high_low(df, 20)
-        close = price_now(df)
-
-        # Price action bias, bukan indikator.
-        if high_20 > high_50 * 0.995 and close > (high_50 + low_50) / 2:
+        if last > first and close > eq:
             return "BULLISH"
-        if low_20 < low_50 * 1.005 and close < (high_50 + low_50) / 2:
+        if last < first and close < eq:
             return "BEARISH"
-
-        first = float(df["Close"].tail(30).iloc[0])
-        last = float(df["Close"].tail(30).iloc[-1])
-        if last > first:
+        if hi20 > hi50 * 0.995 and close > eq:
             return "BULLISH"
-        if last < first:
+        if lo20 < lo50 * 1.005 and close < eq:
             return "BEARISH"
         return "SIDEWAYS"
 
-    def premium_discount(df):
-        hi, lo = swing_high_low(df, 50)
+    def premium_discount(candles):
+        hi, lo = swing_high_low(candles, 50)
         eq = (hi + lo) / 2
-        price = price_now(df)
+        price = price_now(candles)
         if price < eq:
             return "DISCOUNT", eq, hi, lo
         if price > eq:
             return "PREMIUM", eq, hi, lo
         return "EQ", eq, hi, lo
 
-    def detect_liquidity_sweep(df):
-        prev = df.iloc[-31:-1]
-        last = df.iloc[-1]
+    def detect_liquidity_sweep(candles):
+        if len(candles) < 35:
+            return None, None
 
-        prev_high = float(prev["High"].max())
-        prev_low = float(prev["Low"].min())
+        prev = candles[-31:-1]
+        last = candles[-1]
+        prev_high = max(candle_col(prev, "High"))
+        prev_low = min(candle_col(prev, "Low"))
         last_high = float(last["High"])
         last_low = float(last["Low"])
         last_close = float(last["Close"])
@@ -638,15 +681,14 @@ def get_market_analysis(pair_key, tf_key):
 
         if last_low < prev_low and last_close > prev_low and last_close > last_open:
             return "SELLSIDE_SWEEP", last_low
-
         if last_high > prev_high and last_close < prev_high and last_close < last_open:
             return "BUYSIDE_SWEEP", last_high
-
         return None, None
 
-    def detect_displacement(df, direction):
-        last = df.iloc[-1]
-        avg_range = float((df["High"].tail(20) - df["Low"].tail(20)).mean())
+    def detect_displacement(candles, direction):
+        last = candles[-1]
+        ranges = [abs(c["High"] - c["Low"]) for c in candles_tail(candles, 20)]
+        avg_range = sum(ranges) / max(len(ranges), 1)
         rng = candle_range(last)
         body = body_size(last)
         direction_now = candle_direction(last)
@@ -657,11 +699,13 @@ def get_market_analysis(pair_key, tf_key):
             return True
         return False
 
-    def detect_mss_bos(df, direction):
-        recent = df.iloc[-21:-1]
-        last_close = float(df["Close"].iloc[-1])
-        prev_high = float(recent["High"].max())
-        prev_low = float(recent["Low"].min())
+    def detect_mss_bos(candles, direction):
+        if len(candles) < 30:
+            return None
+        recent = candles[-21:-1]
+        last_close = float(candles[-1]["Close"])
+        prev_high = max(candle_col(recent, "High"))
+        prev_low = min(candle_col(recent, "Low"))
 
         if direction == "BUY" and last_close > prev_high:
             return "BULLISH_MSS"
@@ -669,39 +713,34 @@ def get_market_analysis(pair_key, tf_key):
             return "BEARISH_MSS"
         return None
 
-    def detect_fvg(df, direction):
-        for i in range(len(df)-1, max(2, len(df)-25), -1):
-            c0 = df.iloc[i-2]
-            c2 = df.iloc[i]
+    def detect_fvg(candles, direction):
+        avg_ranges = [abs(c["High"] - c["Low"]) for c in candles_tail(candles, 20)]
+        avg_range = sum(avg_ranges) / max(len(avg_ranges), 1)
+
+        for i in range(len(candles)-1, max(2, len(candles)-25), -1):
+            c0 = candles[i-2]
+            c2 = candles[i]
 
             if direction == "BUY":
                 gap_low = float(c0["High"])
                 gap_high = float(c2["Low"])
-                if gap_high > gap_low:
-                    gap_size = gap_high - gap_low
-                    avg_range = float((df["High"].tail(20) - df["Low"].tail(20)).mean())
-                    if gap_size >= avg_range * 0.12:
-                        return {"type": "BULLISH_FVG", "low": gap_low, "high": gap_high, "mid": (gap_low + gap_high) / 2}
+                if gap_high > gap_low and (gap_high - gap_low) >= avg_range * 0.12:
+                    return {"type": "BULLISH_FVG", "low": gap_low, "high": gap_high, "mid": (gap_low + gap_high) / 2}
 
             if direction == "SELL":
                 gap_low = float(c2["High"])
                 gap_high = float(c0["Low"])
-                if gap_high > gap_low:
-                    gap_size = gap_high - gap_low
-                    avg_range = float((df["High"].tail(20) - df["Low"].tail(20)).mean())
-                    if gap_size >= avg_range * 0.12:
-                        return {"type": "BEARISH_FVG", "low": gap_low, "high": gap_high, "mid": (gap_low + gap_high) / 2}
-
+                if gap_high > gap_low and (gap_high - gap_low) >= avg_range * 0.12:
+                    return {"type": "BEARISH_FVG", "low": gap_low, "high": gap_high, "mid": (gap_low + gap_high) / 2}
         return None
 
-    def detect_order_block(df, direction):
-        candles = df.tail(25)
-        avg_range = float((candles["High"] - candles["Low"]).mean())
+    def detect_order_block(candles, direction):
+        recent = candles_tail(candles, 25)
+        avg_range = sum([candle_range(c) for c in recent]) / max(len(recent), 1)
 
-        for i in range(len(candles)-3, 3, -1):
-            c = candles.iloc[i]
-            nxt = candles.iloc[i+1]
-
+        for i in range(len(recent)-3, 3, -1):
+            c = recent[i]
+            nxt = recent[i+1]
             c_dir = candle_direction(c)
             nxt_dir = candle_direction(nxt)
             nxt_range = candle_range(nxt)
@@ -711,30 +750,26 @@ def get_market_analysis(pair_key, tf_key):
 
             if direction == "SELL" and c_dir == "BULLISH" and nxt_dir == "BEARISH" and nxt_range >= avg_range * 1.15:
                 return {"type": "BEARISH_OB", "low": float(c["Open"]), "high": float(c["High"]), "mid": (float(c["Open"]) + float(c["High"])) / 2}
-
         return None
 
-    def detect_ote(df, direction):
-        hi, lo = swing_high_low(df, 40)
+    def detect_ote(candles, direction):
+        hi, lo = swing_high_low(candles, 40)
         rng = max(hi - lo, 0.0001)
 
         if direction == "BUY":
-            ote_high = hi - rng * 0.62
-            ote_low = hi - rng * 0.79
-            return {"low": min(ote_low, ote_high), "high": max(ote_low, ote_high), "mid": (ote_low + ote_high) / 2}
+            a = hi - rng * 0.62
+            b = hi - rng * 0.79
+            return {"low": min(a, b), "high": max(a, b), "mid": (a + b) / 2}
 
-        ote_low = lo + rng * 0.62
-        ote_high = lo + rng * 0.79
-        return {"low": min(ote_low, ote_high), "high": max(ote_low, ote_high), "mid": (ote_low + ote_high) / 2}
+        a = lo + rng * 0.62
+        b = lo + rng * 0.79
+        return {"low": min(a, b), "high": max(a, b), "mid": (a + b) / 2}
 
-    def detect_wco(df):
-        # WCO sederhana:
-        # Spring = sweep low lalu close balik di atas range low.
-        # Upthrust = sweep high lalu close balik di bawah range high.
-        prev = df.iloc[-31:-1]
-        last = df.iloc[-1]
-        prev_high = float(prev["High"].max())
-        prev_low = float(prev["Low"].min())
+    def detect_wco(candles):
+        prev = candles[-31:-1]
+        last = candles[-1]
+        prev_high = max(candle_col(prev, "High"))
+        prev_low = min(candle_col(prev, "Low"))
         close = float(last["Close"])
         low = float(last["Low"])
         high = float(last["High"])
@@ -749,49 +784,46 @@ def get_market_analysis(pair_key, tf_key):
         valid = [z for z in zones if z]
         if not valid:
             return None
-
         low = max(float(z["low"]) for z in valid)
         high = min(float(z["high"]) for z in valid)
-
         if high > low:
             return {"low": low, "high": high, "mid": (low + high) / 2, "type": "OVERLAP"}
-
-        # Kalau tidak overlap, pilih FVG dulu, lalu OB, lalu OTE.
         return valid[0]
 
     try:
-        df_m1 = fetch_candles("M1", 150)
+        c_m1 = fetch_twelvedata_candles(pair_key, "M1", 180)
         pytime.sleep(0.4)
-        df_m5 = fetch_candles("M5", 150)
+        c_m5 = fetch_twelvedata_candles(pair_key, "M5", 180)
         pytime.sleep(0.4)
-        df_m15 = fetch_candles("M15", 150)
+        c_m15 = fetch_twelvedata_candles(pair_key, "M15", 180)
         pytime.sleep(0.4)
-        df_h1 = fetch_candles("H1", 150)
+        c_h1 = fetch_twelvedata_candles(pair_key, "H1", 180)
         pytime.sleep(0.4)
-        df_h4 = fetch_candles("H4", 150)
+        c_h4 = fetch_twelvedata_candles(pair_key, "H4", 180)
     except Exception as e:
         return f"""
 👑 <b>CAPITAL ELITE PROJECT</b>
 
-📡 <b>Market Data Sync</b>
-Data candle belum stabil / provider lagi limit.
+📡 <b>TwelveData Sync</b>
+Data market belum stabil / API key belum aktif.
 
 Detail:
 <code>{type(e).__name__}: {str(e)[:160]}</code>
 
-🔄 Coba ulang 30-60 detik lagi.
+Pastikan Railway Variables:
+<code>TD_API_KEY</code>
+
 {disclaimer_footer()}
 """
 
-    price = price_now(df_m5)
-    h1_bias = htf_bias(df_h1)
-    h4_bias = htf_bias(df_h4)
-    m15_bias = htf_bias(df_m15)
-    m5_bias = htf_bias(df_m5)
-    location, eq, range_high, range_low = premium_discount(df_h1)
+    price = price_now(c_m5)
+    h1_bias = htf_bias(c_h1)
+    h4_bias = htf_bias(c_h4)
+    m15_bias = htf_bias(c_m15)
+    m5_bias = htf_bias(c_m5)
+    location, eq, range_high, range_low = premium_discount(c_h1)
 
-    now_wib = wib_now()
-    hour = now_wib.hour
+    hour = wib_now().hour
     if 5 <= hour < 14:
         session_tag = "Asia"
         session_score = 3
@@ -807,7 +839,6 @@ Detail:
 
     buy_base = 0
     sell_base = 0
-
     if h4_bias == "BULLISH": buy_base += 10
     if h4_bias == "BEARISH": sell_base += 10
     if h1_bias == "BULLISH": buy_base += 15
@@ -819,13 +850,13 @@ Detail:
 
     direction = "BUY" if buy_base >= sell_base else "SELL"
 
-    sweep, sweep_price = detect_liquidity_sweep(df_m15)
-    wco = detect_wco(df_m15)
-    displacement = detect_displacement(df_m15, direction)
-    mss = detect_mss_bos(df_m15, direction)
-    fvg = detect_fvg(df_m5, direction)
-    ob = detect_order_block(df_m5, direction)
-    ote = detect_ote(df_m15, direction)
+    sweep, sweep_price = detect_liquidity_sweep(c_m15)
+    wco = detect_wco(c_m15)
+    displacement = detect_displacement(c_m15, direction)
+    mss = detect_mss_bos(c_m15, direction)
+    fvg = detect_fvg(c_m5, direction)
+    ob = detect_order_block(c_m5, direction)
+    ote = detect_ote(c_m15, direction)
 
     score = 0
     reasons = []
@@ -840,7 +871,7 @@ Detail:
         if wco == "SPRING":
             score += 10; reasons.append("WCO Spring")
         if location == "DISCOUNT":
-            score += 10; reasons.append("Discount zone")
+            score += 10; reasons.append("Discount")
     else:
         if h4_bias == "BEARISH" and h1_bias == "BEARISH":
             score += 20; reasons.append("HTF bearish")
@@ -851,7 +882,7 @@ Detail:
         if wco == "UPTHRUST":
             score += 10; reasons.append("WCO Upthrust")
         if location == "PREMIUM":
-            score += 10; reasons.append("Premium zone")
+            score += 10; reasons.append("Premium")
 
     if displacement:
         score += 15; reasons.append("Displacement")
@@ -892,6 +923,7 @@ Detail:
 
 💰 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
 📍 Price: <code>{fmt(price)}</code>
+📡 Source: <b>TwelveData</b>
 
 📊 Score: <b>{min(score, 99)}/100</b>
 🧭 Bias: <b>{direction}</b>
@@ -914,10 +946,10 @@ Tunggu sweep + displacement + MSS + FVG/OB.
     entry_high = float(zone["high"])
     zone_mid = float(zone["mid"])
 
-    atr_like = float((df_m5["High"].tail(20) - df_m5["Low"].tail(20)).mean())
+    ranges = [abs(c["High"] - c["Low"]) for c in candles_tail(c_m5, 20)]
+    atr_like = sum(ranges) / max(len(ranges), 1)
     recent_entry = fmt(price)
 
-    # Area terlalu jauh dari harga = jangan dipaksa.
     max_dist = max(atr_like * 2.2, 1.2 if pair_key == "XAUUSD" else 0.001)
     if abs(zone_mid - price) > max_dist:
         result = f"""
@@ -925,6 +957,7 @@ Tunggu sweep + displacement + MSS + FVG/OB.
 
 💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
 📍 Price: <code>{fmt(price)}</code>
+📡 Source: <b>TwelveData</b>
 📊 Score: <b>{min(score, 99)}/100</b>
 
 POI valid tapi terlalu jauh dari harga sekarang.
@@ -936,18 +969,18 @@ Tunggu retrace mendekati zone.
         return result
 
     if direction == "BUY":
-        sl = min(float(df_m15["Low"].tail(30).min()), entry_low) - atr_like * 0.8
+        sl = min(candle_col(candles_tail(c_m15, 30), "Low") + [entry_low]) - atr_like * 0.8
         risk = max(entry_high - sl, 0.0001)
         tp1 = entry_high + risk * 1.2
         tp2 = entry_high + risk * 2.0
-        tp3 = max(float(df_m15["High"].tail(50).max()), entry_high + risk * 2.5)
+        tp3 = max(candle_col(candles_tail(c_m15, 50), "High") + [entry_high + risk * 2.5])
         label = "🟢 STRONG BUY"
     else:
-        sl = max(float(df_m15["High"].tail(30).max()), entry_high) + atr_like * 0.8
+        sl = max(candle_col(candles_tail(c_m15, 30), "High") + [entry_high]) + atr_like * 0.8
         risk = max(sl - entry_low, 0.0001)
         tp1 = entry_low - risk * 1.2
         tp2 = entry_low - risk * 2.0
-        tp3 = min(float(df_m15["Low"].tail(50).min()), entry_low - risk * 2.5)
+        tp3 = min(candle_col(candles_tail(c_m15, 50), "Low") + [entry_low - risk * 2.5])
         label = "🔴 STRONG SELL"
 
     grade = "ELITE S+" if score >= 95 else "A+" if score >= 90 else "A"
@@ -959,6 +992,7 @@ Tunggu retrace mendekati zone.
 💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
 {label}
 📊 Score: <b>{min(score, 99)}/100</b> | <b>{grade}</b>
+📡 Source: <b>TwelveData</b>
 
 📍 Entry: <code>{fmt(entry_low)} - {fmt(entry_high)}</code>
 📌 Recent: <code>{recent_entry}</code>
@@ -1415,9 +1449,8 @@ Kelola risiko dan modal dengan bijak.
         add_news_usage(user_id)
         if events:
             text = "⬜━━━━━━━━━━━━━━━━━━━━⬜\n📰 <b>FOREX FACTORY TODAY</b>\n⬜━━━━━━━━━━━━━━━━━━━━⬜\n\n"
-            for idx, ev in enumerate(events, 1):
-                text += f"<b>{idx}. USD {ev['impact']}</b>\n{ev['raw']}\n\n"
-            text += "Gunakan command manual setelah actual keluar:\n<code>/news cpi actual=3.2 forecast=3.4 previous=3.5</code>"
+            text = format_news_result_message(events[:5])
+            text += "\nGunakan command manual jika data belum kebaca:\n<code>/news cpi actual=3.2 forecast=3.4 previous=3.5</code>"
         else:
             text = "⚠️ Forex Factory gagal dibaca / tidak ada news USD penting.\n\nGunakan manual:\n<code>/news nfp actual=250 forecast=180 previous=190</code>\n<code>/fomc hawkish</code>"
         user = get_user(user_id)
@@ -2402,6 +2435,225 @@ Segala keputusan trading sepenuhnya menjadi tanggung jawab masing-masing penggun
             )
         except:
             pass
+
+# ==============================
+# NEWS RESULT ENGINE
+# ==============================
+def extract_news_values(raw_text):
+    """
+    Coba ambil Actual / Forecast / Previous dari teks Forex Factory.
+    Karena HTML FF bisa berubah, parser dibuat fleksibel.
+    """
+    raw = re.sub(r"\s+", " ", str(raw_text)).strip()
+
+    def find_value(label_patterns):
+        for pat in label_patterns:
+            m = re.search(pat, raw, flags=re.I)
+            if m:
+                return m.group(1).strip()
+        return None
+
+    actual = find_value([
+        r"Actual\s*[: ]\s*([+-]?\d+(?:\.\d+)?%?[KMB]?)",
+        r"Act(?:ual)?\s*([+-]?\d+(?:\.\d+)?%?[KMB]?)"
+    ])
+    forecast = find_value([
+        r"Forecast\s*[: ]\s*([+-]?\d+(?:\.\d+)?%?[KMB]?)",
+        r"Fore(?:cast)?\s*([+-]?\d+(?:\.\d+)?%?[KMB]?)"
+    ])
+    previous = find_value([
+        r"Previous\s*[: ]\s*([+-]?\d+(?:\.\d+)?%?[KMB]?)",
+        r"Prev(?:ious)?\s*([+-]?\d+(?:\.\d+)?%?[KMB]?)"
+    ])
+
+    # fallback: ambil angka yang muncul, biasanya FF raw kadang urutan actual forecast previous
+    nums = re.findall(r"[+-]?\d+(?:\.\d+)?%?[KMB]?", raw, flags=re.I)
+    if actual is None and len(nums) >= 1:
+        actual = nums[-3] if len(nums) >= 3 else nums[0]
+    if forecast is None and len(nums) >= 2:
+        forecast = nums[-2]
+    if previous is None and len(nums) >= 3:
+        previous = nums[-1]
+
+    return actual, forecast, previous
+
+
+def detect_news_type(raw_text):
+    raw = str(raw_text).lower()
+
+    if "core cpi" in raw:
+        return "core_cpi"
+    if "cpi" in raw or "consumer price index" in raw:
+        return "cpi"
+    if "core pce" in raw:
+        return "core_pce"
+    if "pce" in raw:
+        return "pce"
+    if "ppi" in raw:
+        return "ppi"
+    if "non-farm" in raw or "nonfarm" in raw or "nfp" in raw:
+        return "nfp"
+    if "unemployment" in raw:
+        return "unemployment"
+    if "average hourly earnings" in raw or "earnings" in raw:
+        return "earnings"
+    if "federal funds" in raw or "interest rate" in raw or "rate decision" in raw:
+        return "rate"
+    if "fomc" in raw or "powell" in raw:
+        return "fomc"
+    if "pmi" in raw or "ism" in raw:
+        return "pmi"
+    if "retail sales" in raw:
+        return "retail_sales"
+    if "gdp" in raw:
+        return "gdp"
+    return "general"
+
+
+def news_to_float(value):
+    if value is None:
+        return None
+    s = str(value).strip().upper().replace(",", "").replace("%", "")
+    multiplier = 1
+    if s.endswith("K"):
+        multiplier = 1000
+        s = s[:-1]
+    elif s.endswith("M"):
+        multiplier = 1000000
+        s = s[:-1]
+    elif s.endswith("B"):
+        multiplier = 1000000000
+        s = s[:-1]
+    try:
+        return float(s) * multiplier
+    except Exception:
+        return None
+
+
+def evaluate_news_impact(raw_text):
+    """
+    Return bias USD dan arah XAU dari Actual vs Forecast.
+    Prinsip umum:
+    - Inflasi/tenaga kerja/PMI/GDP/retail lebih tinggi dari forecast = USD bullish = XAU bearish.
+    - Unemployment lebih tinggi = USD bearish = XAU bullish.
+    - Rate/FOMC perlu interpretasi manual, kalau angka ada: rate lebih tinggi = USD bullish.
+    """
+    actual, forecast, previous = extract_news_values(raw_text)
+    news_type = detect_news_type(raw_text)
+
+    actual_num = news_to_float(actual)
+    forecast_num = news_to_float(forecast)
+
+    usd_bias = "NEUTRAL"
+    xau_direction = "WAIT"
+    confidence = 55
+    reason = "Data belum lengkap / belum ada actual yang jelas. Tunggu rilis dan reaksi candle."
+
+    if actual_num is not None and forecast_num is not None:
+        diff = actual_num - forecast_num
+
+        positive_usd_types = [
+            "cpi", "core_cpi", "pce", "core_pce", "ppi", "nfp", "earnings",
+            "rate", "pmi", "retail_sales", "gdp", "general"
+        ]
+
+        if news_type == "unemployment":
+            if diff > 0:
+                usd_bias = "BEARISH"
+                xau_direction = "BULLISH / BUY BIAS"
+                reason = "Unemployment lebih tinggi dari forecast → ekonomi melemah → USD cenderung melemah → XAU berpotensi naik."
+                confidence = 82
+            elif diff < 0:
+                usd_bias = "BULLISH"
+                xau_direction = "BEARISH / SELL BIAS"
+                reason = "Unemployment lebih rendah dari forecast → tenaga kerja kuat → USD cenderung menguat → XAU berpotensi turun."
+                confidence = 82
+            else:
+                reason = "Actual sama dengan forecast → tunggu reaksi market."
+
+        elif news_type in positive_usd_types:
+            if diff > 0:
+                usd_bias = "BULLISH"
+                xau_direction = "BEARISH / SELL BIAS"
+                reason = "Actual lebih tinggi dari forecast → USD cenderung menguat → XAU berpotensi tertekan."
+                confidence = 84
+            elif diff < 0:
+                usd_bias = "BEARISH"
+                xau_direction = "BULLISH / BUY BIAS"
+                reason = "Actual lebih rendah dari forecast → USD cenderung melemah → XAU berpotensi naik."
+                confidence = 84
+            else:
+                reason = "Actual sama dengan forecast → potensi market choppy, tunggu candle confirmation."
+
+        if abs(diff) > 0:
+            try:
+                base = abs(forecast_num) if abs(forecast_num) > 0 else 1
+                surprise = abs(diff) / base
+                if surprise >= 0.10:
+                    confidence = min(confidence + 8, 95)
+                elif surprise >= 0.05:
+                    confidence = min(confidence + 4, 90)
+            except Exception:
+                pass
+
+    if news_type in ["fomc"] and actual_num is None:
+        usd_bias = "WAIT"
+        xau_direction = "WAIT FOR STATEMENT"
+        confidence = 65
+        reason = "FOMC/Powell perlu baca tone statement. Tunggu 1-2 candle M5 setelah rilis."
+
+    return {
+        "type": news_type,
+        "actual": actual or "-",
+        "forecast": forecast or "-",
+        "previous": previous or "-",
+        "usd_bias": usd_bias,
+        "xau_direction": xau_direction,
+        "confidence": confidence,
+        "reason": reason
+    }
+
+
+def format_news_result_message(events):
+    today = wib_now().strftime("%d %b %Y")
+    text = f"""📰 <b>CAPITAL ELITE NEWS RESULT</b>
+<code>{today} • Auto Impact</code>
+"""
+
+    for ev in events[:4]:
+        raw_event = str(ev.get("raw", "-"))
+        clean_event = clean_ff_event_text(raw_event)
+        wib_time = convert_ff_time_to_wib(raw_event)
+        impact = evaluate_news_impact(raw_event)
+
+        text += f"""
+━━━━━━━━━━━━━━
+🇺🇸 <b>USD NEWS</b> • {wib_time}
+📌 {clean_event[:140]}
+
+Actual: <b>{impact['actual']}</b>
+Forecast: <b>{impact['forecast']}</b>
+Previous: <b>{impact['previous']}</b>
+
+💵 USD Bias: <b>{impact['usd_bias']}</b>
+🥇 XAUUSD: <b>{impact['xau_direction']}</b>
+📊 Confidence: <b>{impact['confidence']}%</b>
+
+{impact['reason']}
+"""
+
+    text += f"""
+━━━━━━━━━━━━━━
+⚠️ <b>Execution Rule</b>
+Jangan entry di detik rilis.
+Tunggu 1-2 candle M5 close + spread normal.
+
+⚠️ <b>Not Financial Advice</b>
+Trading memiliki risiko tinggi.
+"""
+    return text
+
+
 async def auto_news_alert(context):
     try:
         events = parse_forex_factory_today()
@@ -2412,74 +2664,41 @@ async def auto_news_alert(context):
 
         users = load_users()
         targets = list(users.keys())
-        today = wib_now().strftime("%d %b %Y")
+
         sent_db = load_json_file(NEWS_SENT_FILE, {})
         today_key = wib_now().strftime("%Y-%m-%d")
         sent_today = set(sent_db.get(today_key, []))
 
-        selected_events = []
         important_terms = [
             "cpi", "core cpi", "consumer price index", "nfp", "non-farm", "nonfarm",
             "fomc", "federal funds rate", "interest rate", "powell", "pce", "core pce",
-            "ppi", "unemployment", "average hourly earnings", "pmi", "ism", "gdp"
+            "ppi", "unemployment", "average hourly earnings", "pmi", "ism", "gdp",
+            "retail sales"
         ]
 
+        selected_events = []
         for ev in events:
             raw = str(ev.get("raw", ""))
             raw_l = raw.lower()
             if not any(k in raw_l for k in important_terms):
                 continue
+
             key = get_news_key(raw)
             if key in sent_today:
                 continue
+
             selected_events.append((key, ev))
 
         if not selected_events:
-            print("FOREX FACTORY: news penting sudah pernah dikirim hari ini")
+            print("FOREX FACTORY: news penting sudah pernah dikirim / belum ada actual baru")
             return
 
-        text = f"""
-📰 <b>CAPITAL ELITE NEWS INTELLIGENCE</b>
-<code>{today} • High Impact USD Watch</code>
+        message = format_news_result_message([ev for key, ev in selected_events[:4]])
 
-🔥 <b>HIGH IMPACT NEWS DETECTED</b>
-
-📊 <b>USD News Watch</b>
-"""
-
-        for key, ev in selected_events[:5]:
-            raw_event = str(ev.get("raw", "-"))
-            wib_time = convert_ff_time_to_wib(raw_event)
-            clean_event = clean_ff_event_text(raw_event)
-
-            text += f"""
-• <b>USD {ev.get('impact', 'NEWS')}</b>
-🕘 <b>{wib_time}</b>
-📌 {clean_event[:160]}
-"""
+        for key, ev in selected_events[:4]:
             sent_today.add(key)
 
-        text += """
-⚠️ <b>Market Focus</b>
-XAUUSD • BTCUSD • ETHUSD • USD Index
-
-🚫 <b>No Trade Zone</b>
-Hindari entry besar menjelang news.
-Tunggu spread normal dan candle close setelah news.
-
-🕘 <b>Timezone</b>
-Jam rilis sudah dikonversi ke estimasi WIB.
-Tetap validasi kalender ekonomi sebelum news besar.
-
-🧠 <b>Elite Note</b>
-Jangan nebak news. Tunggu market kasih arah.
-
-⚠️ <b>Not Financial Advice</b>
-Trading memiliki risiko tinggi.
-"""
-
         sent_db[today_key] = list(sent_today)
-        # keep only latest 7 days
         sorted_days = sorted(sent_db.keys())[-7:]
         sent_db = {d: sent_db[d] for d in sorted_days}
         save_json_file(NEWS_SENT_FILE, sent_db)
@@ -2488,7 +2707,7 @@ Trading memiliki risiko tinggi.
             try:
                 await context.bot.send_message(
                     chat_id=int(uid),
-                    text=text,
+                    text=message,
                     parse_mode="HTML"
                 )
             except Exception:
