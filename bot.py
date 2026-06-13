@@ -1,6 +1,6 @@
 from tradingview_ta import TA_Handler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from datetime import datetime, timedelta
 import json
 import os
@@ -29,6 +29,9 @@ LAST_SIGNAL_FILE = "last_signal.json"
 EXPIRED_REMINDER_FILE = "expired_reminder.json"
 PENDING_PAYMENT_FILE = "pending_payment.json"
 REALTIME_SIGNAL_FILE = "realtime_signal.json"
+TRADE_JOURNAL_FILE = "trade_journal.json"
+OPEN_TRADES_FILE = "open_trades.json"
+TRADE_COUNTER_FILE = "trade_counter.json"
 REALTIME_SCAN_PAIRS = ["XAUUSD", "BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "NAS100"]
 REALTIME_SCAN_TF = "M5"
 REALTIME_SCAN_INTERVAL = 300
@@ -64,6 +67,357 @@ IMPORTANT_NEWS_KEYWORDS = [
     "Federal Funds Rate", "Fed Interest Rate", "PMI", "ISM", "Manufacturing PMI",
     "Services PMI", "PCE", "Core PCE", "Unemployment Rate", "Average Hourly Earnings"
 ]
+
+
+# ==============================
+# PREMIUM TRADE TRACKING ENGINE
+# ==============================
+def next_trade_id():
+    db = load_json_file(TRADE_COUNTER_FILE, {"last_id": 0})
+    db["last_id"] = int(db.get("last_id", 0)) + 1
+    save_json_file(TRADE_COUNTER_FILE, db)
+    return db["last_id"]
+
+
+def parse_analysis_levels(analysis_text):
+    clean = re.sub(r"<[^>]+>", "", str(analysis_text))
+    direction = "BUY" if "BUY PLAN" in clean or "STRONG BUY" in clean or "🟢" in clean else "SELL" if "SELL PLAN" in clean or "STRONG SELL" in clean or "🔴" in clean else "WAIT"
+
+    def find_one(pattern):
+        m = re.search(pattern, clean, flags=re.I)
+        if not m:
+            return None
+        try:
+            return float(m.group(1).replace(",", ""))
+        except Exception:
+            return None
+
+    def find_entry():
+        m = re.search(r"Entry:\s*([0-9.,]+)\s*-\s*([0-9.,]+)", clean, flags=re.I)
+        if not m:
+            return None, None, None
+        a = float(m.group(1).replace(",", ""))
+        b = float(m.group(2).replace(",", ""))
+        return min(a, b), max(a, b), (a + b) / 2
+
+    entry_low, entry_high, entry_mid = find_entry()
+    return {
+        "direction": direction,
+        "entry_low": entry_low,
+        "entry_high": entry_high,
+        "entry_mid": entry_mid,
+        "sl": find_one(r"SL:\s*([0-9.,]+)"),
+        "tp1": find_one(r"TP1:\s*([0-9.,]+)"),
+        "tp2": find_one(r"TP2:\s*([0-9.,]+)"),
+        "tp3": find_one(r"TP3:\s*([0-9.,]+)"),
+        "score": int(find_one(r"Score:\s*([0-9]+)\/100") or 0)
+    }
+
+
+def create_trade_from_analysis(pair_key, tf_key, analysis_text, source="manual"):
+    if "NO TRADE" in str(analysis_text):
+        return None
+
+    levels = parse_analysis_levels(analysis_text)
+    required = ["entry_low", "entry_high", "entry_mid", "sl", "tp1"]
+    if levels["direction"] not in ["BUY", "SELL"] or any(levels.get(k) is None for k in required):
+        return None
+
+    trade_id = next_trade_id()
+    trade = {
+        "id": trade_id,
+        "pair": pair_key,
+        "tf": tf_key,
+        "direction": levels["direction"],
+        "entry_low": levels["entry_low"],
+        "entry_high": levels["entry_high"],
+        "entry_mid": levels["entry_mid"],
+        "sl": levels["sl"],
+        "tp1": levels["tp1"],
+        "tp2": levels["tp2"],
+        "tp3": levels["tp3"],
+        "score": levels["score"],
+        "status": "OPEN",
+        "source": source,
+        "created_at": wib_now().strftime("%Y-%m-%d %H:%M:%S"),
+        "updated_at": wib_now().strftime("%Y-%m-%d %H:%M:%S"),
+        "tp1_notified": False,
+        "be_notified": False,
+        "final_result": None
+    }
+
+    open_trades = load_json_file(OPEN_TRADES_FILE, [])
+    for t in open_trades:
+        try:
+            same_pair = t.get("pair") == pair_key and t.get("direction") == trade["direction"] and t.get("status") == "OPEN"
+            entry_diff = abs(float(t.get("entry_mid", 0)) - float(trade["entry_mid"]))
+            threshold = max(abs(trade["entry_mid"]) * 0.0002, 0.5 if pair_key == "XAUUSD" else 0.0005)
+            if same_pair and entry_diff <= threshold:
+                return None
+        except Exception:
+            pass
+
+    open_trades.append(trade)
+    open_trades = open_trades[-80:]
+    save_json_file(OPEN_TRADES_FILE, open_trades)
+    return trade
+
+
+def close_trade(trade, result, close_price=None):
+    journal = load_json_file(TRADE_JOURNAL_FILE, {"trades": [], "win": 0, "loss": 0, "be": 0})
+    trade["status"] = "CLOSED"
+    trade["final_result"] = result
+    trade["close_price"] = close_price
+    trade["updated_at"] = wib_now().strftime("%Y-%m-%d %H:%M:%S")
+
+    if result == "WIN":
+        journal["win"] = int(journal.get("win", 0)) + 1
+    elif result == "LOSS":
+        journal["loss"] = int(journal.get("loss", 0)) + 1
+    else:
+        journal["be"] = int(journal.get("be", 0)) + 1
+
+    journal.setdefault("trades", []).append(trade)
+    journal["trades"] = journal["trades"][-500:]
+    save_json_file(TRADE_JOURNAL_FILE, journal)
+
+
+def trade_hit_level(trade, price):
+    direction = trade.get("direction")
+    price = float(price)
+
+    if direction == "BUY":
+        if price <= float(trade["sl"]):
+            return "SL"
+        if trade.get("tp3") and price >= float(trade["tp3"]):
+            return "TP3"
+        if trade.get("tp2") and price >= float(trade["tp2"]):
+            return "TP2"
+        if price >= float(trade["tp1"]):
+            return "TP1"
+    elif direction == "SELL":
+        if price >= float(trade["sl"]):
+            return "SL"
+        if trade.get("tp3") and price <= float(trade["tp3"]):
+            return "TP3"
+        if trade.get("tp2") and price <= float(trade["tp2"]):
+            return "TP2"
+        if price <= float(trade["tp1"]):
+            return "TP1"
+    return None
+
+
+def performance_summary_text():
+    journal = load_json_file(TRADE_JOURNAL_FILE, {"trades": [], "win": 0, "loss": 0, "be": 0})
+    win = int(journal.get("win", 0))
+    loss = int(journal.get("loss", 0))
+    be = int(journal.get("be", 0))
+    total_closed = win + loss + be
+    winrate = (win / max(win + loss, 1)) * 100
+    trades = journal.get("trades", [])
+
+    pair_stats = {}
+    for t in trades:
+        p = t.get("pair", "-")
+        pair_stats.setdefault(p, {"win": 0, "loss": 0, "be": 0})
+        r = t.get("final_result")
+        if r == "WIN":
+            pair_stats[p]["win"] += 1
+        elif r == "LOSS":
+            pair_stats[p]["loss"] += 1
+        else:
+            pair_stats[p]["be"] += 1
+
+    best_pair = "-"
+    best_wr = -1
+    for p, s in pair_stats.items():
+        wr = s["win"] / max(s["win"] + s["loss"], 1) * 100
+        if (s["win"] + s["loss"]) >= 3 and wr > best_wr:
+            best_pair = p
+            best_wr = wr
+
+    open_trades = load_json_file(OPEN_TRADES_FILE, [])
+    open_count = sum(1 for t in open_trades if t.get("status") == "OPEN")
+
+    return f"""
+📊 <b>CAPITAL ELITE PERFORMANCE</b>
+
+Total Closed: <b>{total_closed}</b>
+Open Trades: <b>{open_count}</b>
+
+✅ Win: <b>{win}</b>
+❌ Loss: <b>{loss}</b>
+➖ BE: <b>{be}</b>
+
+🏆 Winrate: <b>{winrate:.1f}%</b>
+⭐ Best Pair: <b>{best_pair}</b>
+
+<i>Stats dihitung dari signal yang berhasil dimonitor TP/SL.</i>
+"""
+
+
+def signal_risk_text(pair_key, entry_mid, sl, modal=100000, risk_pct=2):
+    try:
+        entry_mid = float(entry_mid)
+        sl = float(sl)
+        risk_money = modal * risk_pct / 100
+        risk_distance = abs(entry_mid - sl)
+
+        if pair_key in ["XAUUSD", "XAGUSD"]:
+            pips = risk_distance * 100
+        elif pair_key == "USDJPY":
+            pips = risk_distance * 100
+        elif pair_key in ["BTCUSD", "ETHUSD", "NAS100", "US30"]:
+            pips = risk_distance
+        else:
+            pips = risk_distance * 10000
+
+        return f"""
+🧮 <b>Risk Guide</b>
+Risk jarak: <b>{pips:.0f} pips</b>
+Contoh modal Rp{modal:,.0f}, risk {risk_pct}%:
+Max loss: <b>Rp{risk_money:,.0f}</b>
+
+⚠️ Sesuaikan lot dengan broker masing-masing.
+"""
+    except Exception:
+        return ""
+
+
+async def performance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(performance_summary_text(), parse_mode="HTML")
+
+
+async def open_trades_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    trades = load_json_file(OPEN_TRADES_FILE, [])
+    active = [t for t in trades if t.get("status") == "OPEN"]
+    if not active:
+        await update.message.reply_text("Belum ada trade OPEN yang dimonitor.")
+        return
+
+    text = "📌 <b>OPEN TRADE MONITOR</b>\n"
+    for t in active[-15:]:
+        text += f"""
+━━━━━━━━━━━━━━
+#{t.get('id')} <b>{t.get('pair')}</b> {t.get('direction')} | {t.get('tf')}
+Entry: <code>{fmt(t.get('entry_low'))} - {fmt(t.get('entry_high'))}</code>
+SL: <code>{fmt(t.get('sl'))}</code>
+TP1: <code>{fmt(t.get('tp1'))}</code>
+Status: <b>{t.get('status')}</b>
+"""
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def mentor_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = """
+🧠 <b>CAPITAL ELITE AI MENTOR</b>
+
+Screenshot diterima.
+
+Checklist sebelum entry:
+✅ Liquidity sweep
+✅ Displacement
+✅ MSS/BOS
+✅ Harga masuk FVG/OB/CRT zone
+✅ RR minimal 1:2
+✅ Tidak dekat high impact news
+
+Rule mentor:
+Kalau 3 dari 6 belum valid → <b>NO TRADE</b>.
+
+Kirim juga pair + timeframe, contoh:
+<code>BTCUSD M5</code>
+lalu gunakan menu Market Analysis untuk validasi angka Entry/SL/TP.
+"""
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def trade_monitor_job(context):
+    try:
+        trades = load_json_file(OPEN_TRADES_FILE, [])
+        active = [t for t in trades if t.get("status") == "OPEN"]
+        if not active:
+            return
+
+        users = load_users()
+        targets = premium_users(users)
+        if not targets:
+            return
+
+        changed = False
+        for t in active:
+            pair_key = t.get("pair")
+            try:
+                price, src = fetch_realtime_market_price(pair_key)
+                hit = trade_hit_level(t, price)
+                if not hit:
+                    continue
+
+                msg = None
+                if hit == "TP1" and not t.get("tp1_notified"):
+                    t["tp1_notified"] = True
+                    t["be_notified"] = True
+                    t["updated_at"] = wib_now().strftime("%Y-%m-%d %H:%M:%S")
+                    changed = True
+                    msg = f"""
+🎯 <b>TRADE MANAGEMENT UPDATE</b>
+
+Signal #{t.get('id')} • <b>{pair_key}</b> {t.get('direction')}
+✅ <b>TP1 HIT</b>
+
+Price: <code>{fmt(price)}</code>
+
+Action:
+✅ Close partial 50%
+✅ Geser SL ke BE
+✅ Sisakan posisi ke TP2/TP3
+"""
+                elif hit in ["TP2", "TP3"]:
+                    close_trade(t, "WIN", price)
+                    t["status"] = "CLOSED"
+                    changed = True
+                    msg = f"""
+🏆 <b>SIGNAL WIN</b>
+
+Signal #{t.get('id')} • <b>{pair_key}</b> {t.get('direction')}
+✅ <b>{hit} HIT</b>
+
+Close Price: <code>{fmt(price)}</code>
+Result: <b>WIN</b>
+"""
+                elif hit == "SL":
+                    result = "BE" if t.get("tp1_notified") else "LOSS"
+                    close_trade(t, result, price)
+                    t["status"] = "CLOSED"
+                    changed = True
+                    label = "➖ BREAK EVEN / PROTECTED" if result == "BE" else "❌ SIGNAL LOSS"
+                    msg = f"""
+{label}
+
+Signal #{t.get('id')} • <b>{pair_key}</b> {t.get('direction')}
+🛑 <b>SL HIT</b>
+
+Close Price: <code>{fmt(price)}</code>
+Result: <b>{result}</b>
+"""
+
+                if msg:
+                    for uid in targets:
+                        try:
+                            await context.bot.send_message(chat_id=int(uid), text=msg, parse_mode="HTML")
+                        except Exception:
+                            pass
+
+            except Exception as e:
+                print("TRADE MONITOR ITEM ERROR:", e)
+
+        remaining = [t for t in trades if t.get("status") == "OPEN"]
+        if changed:
+            save_json_file(OPEN_TRADES_FILE, remaining[-80:])
+
+    except Exception as e:
+        print("TRADE MONITOR ERROR:", e)
+
 
 # ==============================
 # USER DATABASE
@@ -1437,6 +1791,7 @@ Pilih fitur di bawah dan ikuti setup dengan disiplin.
         [InlineKeyboardButton("📊 Market Analysis", callback_data="menu_market")],
         [InlineKeyboardButton("🎯 Sniper Scanner", callback_data="sniper_menu")],
         [InlineKeyboardButton("📰 News Desk", callback_data="menu_news")],
+        [InlineKeyboardButton("📊 Performance", callback_data="performance"), InlineKeyboardButton("📌 Open Trades", callback_data="open_trades")],
         [InlineKeyboardButton("👤 Account", callback_data="account")],
         [InlineKeyboardButton("💎 Premium", callback_data="upgrade")],
     ]
@@ -1508,6 +1863,10 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(f"🔍 <b>Scanning {PAIRS[pair_key]['name']}</b>\nTF: <b>{tf_key}</b>\n\nFetching realtime quote + validating SMC/ICT/WCO...", parse_mode="HTML")
         try:
             hasil = get_market_analysis(pair_key, tf_key)
+            trade = create_trade_from_analysis(pair_key, tf_key, hasil, source="manual_menu")
+            if trade:
+                hasil += f"\n\n📌 Signal ID: <b>#{trade['id']}</b>\nBot akan monitor TP/SL otomatis."
+                hasil += signal_risk_text(pair_key, trade["entry_mid"], trade["sl"])
             add_market_usage(user_id)
             user = get_user(user_id)
             if not user["premium"]:
@@ -1682,6 +2041,36 @@ FOMC hawkish = USD bullish.
 FOMC dovish = USD bearish.
 """
         await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="menu_news")]]), parse_mode="HTML")
+
+
+    elif data == "performance":
+        await q.edit_message_text(
+            performance_summary_text(),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="back_start")]]),
+            parse_mode="HTML"
+        )
+
+    elif data == "open_trades":
+        trades = load_json_file(OPEN_TRADES_FILE, [])
+        active = [t for t in trades if t.get("status") == "OPEN"]
+        if not active:
+            txt = "📌 <b>OPEN TRADE MONITOR</b>\n\nBelum ada trade OPEN yang dimonitor."
+        else:
+            txt = "📌 <b>OPEN TRADE MONITOR</b>\n"
+            for t in active[-10:]:
+                txt += f"""
+━━━━━━━━━━━━━━
+#{t.get('id')} <b>{t.get('pair')}</b> {t.get('direction')} | {t.get('tf')}
+Entry: <code>{fmt(t.get('entry_low'))} - {fmt(t.get('entry_high'))}</code>
+SL: <code>{fmt(t.get('sl'))}</code>
+TP1: <code>{fmt(t.get('tp1'))}</code>
+Status: <b>{t.get('status')}</b>
+"""
+        await q.edit_message_text(
+            txt,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="back_start")]]),
+            parse_mode="HTML"
+        )
 
     elif data == "account":
         user = get_user(user_id)
@@ -2491,10 +2880,17 @@ async def realtime_auto_scanner(context):
                 analysis = get_market_analysis(pair_key, REALTIME_SCAN_TF)
 
                 if should_broadcast_realtime(pair_key, REALTIME_SCAN_TF, analysis):
+                    trade = create_trade_from_analysis(pair_key, REALTIME_SCAN_TF, analysis, source="realtime_auto")
+                    tracking_note = ""
+                    if trade:
+                        tracking_note = f"\n📌 Signal ID: <b>#{trade['id']}</b>\nBot akan monitor TP/SL otomatis.\n"
+                        tracking_note += signal_risk_text(pair_key, trade["entry_mid"], trade["sl"])
+
                     msg = f"""🚨 <b>CAPITAL ELITE REALTIME SIGNAL</b>
 <code>{PAIRS[pair_key]['name']} • {REALTIME_SCAN_TF} • Auto Scanner</code>
 
 {analysis}
+{tracking_note}
 """
                     log_signal(pair_key, REALTIME_SCAN_TF, analysis)
 
@@ -3127,6 +3523,8 @@ app.add_handler(CommandHandler("risk", risk_command))
 app.add_handler(CommandHandler("edukasi", edukasi_command))
 app.add_handler(CommandHandler("marketnews", marketnews_command))
 app.add_handler(CommandHandler("stats", stats_command))
+app.add_handler(CommandHandler("performance", performance_command))
+app.add_handler(CommandHandler("opentrades", open_trades_command))
 app.add_handler(CommandHandler("realtime", realtime_status_command))
 app.add_handler(CommandHandler("listpremium", listpremium_command))
 app.add_handler(CommandHandler("resettrial", resettrial_command))
@@ -3136,6 +3534,7 @@ app.add_handler(CommandHandler("xag", xag_command))
 app.add_handler(CommandHandler("btc", btc_command))
 app.add_handler(CommandHandler("eth", eth_command))
 app.add_handler(CommandHandler("sniper", sniper_command))
+app.add_handler(MessageHandler(filters.PHOTO, mentor_photo_handler))
 app.add_handler(CallbackQueryHandler(button))
 
 app.job_queue.run_repeating(
@@ -3183,6 +3582,13 @@ app.job_queue.run_repeating(
     realtime_auto_scanner,
     interval=REALTIME_SCAN_INTERVAL,
     first=30
+)
+
+# Monitor open trades every 60 seconds
+app.job_queue.run_repeating(
+    trade_monitor_job,
+    interval=60,
+    first=45
 )
 
 print("CAPITAL ELITE PROJECT BOT ONLINE...")
