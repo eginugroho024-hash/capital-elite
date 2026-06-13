@@ -31,7 +31,7 @@ PENDING_PAYMENT_FILE = "pending_payment.json"
 REALTIME_SIGNAL_FILE = "realtime_signal.json"
 REALTIME_SCAN_PAIRS = ["XAUUSD", "BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "NAS100"]
 REALTIME_SCAN_TF = "M5"
-REALTIME_SCAN_INTERVAL = 60
+REALTIME_SCAN_INTERVAL = 300
 MARKET_CACHE = {}
 MARKET_CACHE_SECONDS = 0
 TRIAL_LIMIT_MARKET = 5
@@ -428,6 +428,29 @@ def td_symbol(pair_key):
     return mapping.get(pair_key, "XAU/USD")
 
 
+
+def td_symbol_candidates(pair_key):
+    primary = td_symbol(pair_key)
+    fallbacks = {
+        "XAUUSD": ["XAU/USD", "XAUUSD"],
+        "XAGUSD": ["XAG/USD", "XAGUSD"],
+        "BTCUSD": ["BTC/USD", "BTCUSD", "BTC/USD:Binance"],
+        "ETHUSD": ["ETH/USD", "ETHUSD", "ETH/USD:Binance"],
+        "EURUSD": ["EUR/USD", "EURUSD"],
+        "GBPUSD": ["GBP/USD", "GBPUSD"],
+        "USDJPY": ["USD/JPY", "USDJPY"],
+        "AUDUSD": ["AUD/USD", "AUDUSD"],
+        "NAS100": ["NAS100", "NDX", "NQ"],
+        "US30": ["DJI", "US30", "DJI:INDEX"],
+    }
+    items = fallbacks.get(pair_key, [primary])
+    result = []
+    for item in [primary] + items:
+        if item not in result:
+            result.append(item)
+    return result
+
+
 def yf_symbol(pair_key):
     # Legacy compatibility
     return td_symbol(pair_key)
@@ -548,24 +571,35 @@ def fetch_twelvedata_candles(pair_key, tf, outputsize=180):
     if not TD_API_KEY:
         raise Exception("TD_API_KEY belum diisi di Railway Variables.")
 
-    symbol = td_symbol(pair_key)
+    symbol_candidates = td_symbol_candidates(pair_key)
     interval = td_interval(tf)
 
     url = "https://api.twelvedata.com/time_series"
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "outputsize": outputsize,
-        "apikey": TD_API_KEY,
-        "format": "JSON",
-        "timezone": "Asia/Jakarta"
-    }
+    data = None
+    last_error = None
 
-    r = requests.get(url, params=params, timeout=15)
-    data = r.json()
+    for symbol in symbol_candidates:
+        params = {
+            "symbol": symbol,
+            "interval": interval,
+            "outputsize": outputsize,
+            "apikey": TD_API_KEY,
+            "format": "JSON",
+            "timezone": "Asia/Jakarta"
+        }
 
-    if data.get("status") == "error":
-        raise Exception(data.get("message", "TwelveData error"))
+        r = requests.get(url, params=params, timeout=15)
+        data = r.json()
+
+        if data.get("status") == "error":
+            last_error = data.get("message", "TwelveData error")
+            continue
+
+        if data.get("values"):
+            break
+
+    if data is None or data.get("status") == "error":
+        raise Exception(last_error or "TwelveData error")
 
     values = data.get("values")
     if not values:
@@ -600,25 +634,77 @@ def fetch_twelvedata_quote(pair_key):
     if not TD_API_KEY:
         raise Exception("TD_API_KEY belum diisi di Railway Variables.")
 
-    symbol = td_symbol(pair_key)
     url = "https://api.twelvedata.com/quote"
-    params = {
-        "symbol": symbol,
-        "apikey": TD_API_KEY
+    last_error = None
+
+    for symbol in td_symbol_candidates(pair_key):
+        params = {
+            "symbol": symbol,
+            "apikey": TD_API_KEY
+        }
+
+        r = requests.get(url, params=params, timeout=12)
+        data = r.json()
+
+        if data.get("status") == "error":
+            last_error = data.get("message", "TwelveData quote error")
+            continue
+
+        for key in ["close", "price", "bid"]:
+            val = data.get(key)
+            if val not in [None, "", "None"]:
+                return float(val)
+
+    raise Exception(last_error or "TwelveData quote tidak mengembalikan harga live.")
+
+
+
+def fetch_realtime_market_price(pair_key):
+    """
+    Universal live price untuk semua market:
+    - XAU/XAG/Forex/Indices: coba TradingView live dulu
+    - Crypto: coba TradingView live dulu
+    - Kalau TradingView kena limit/error: fallback ke TwelveData quote
+
+    Semua pair pakai fungsi ini agar Price/Recent realtime.
+    """
+    pair = PAIRS.get(pair_key, PAIRS["XAUUSD"])
+
+    # 1) TradingView live price
+    try:
+        handler = TA_Handler(
+            symbol=pair["symbol"],
+            screener=pair["screener"],
+            exchange=pair["exchange"],
+            interval=TIMEFRAMES.get("M1", "1m")
+        )
+        data = handler.get_analysis()
+        price = data.indicators.get("close")
+        if price is not None:
+            return float(price), "TradingView Live"
+    except Exception as e:
+        print(f"TRADINGVIEW LIVE PRICE FALLBACK {pair_key}:", e)
+
+    # 2) TwelveData quote fallback
+    try:
+        price = fetch_twelvedata_quote(pair_key)
+        return float(price), "TwelveData Live Quote"
+    except Exception as e:
+        print(f"TWELVEDATA LIVE PRICE ERROR {pair_key}:", e)
+
+    # 3) Hard fail
+    raise Exception(f"Semua live price provider gagal untuk {pair_key}")
+
+
+def apply_price_offset_to_zone(zone, offset):
+    if not zone:
+        return None
+    return {
+        **zone,
+        "low": float(zone["low"]) + offset,
+        "high": float(zone["high"]) + offset,
+        "mid": float(zone["mid"]) + offset,
     }
-
-    r = requests.get(url, params=params, timeout=12)
-    data = r.json()
-
-    if data.get("status") == "error":
-        raise Exception(data.get("message", "TwelveData quote error"))
-
-    for key in ["close", "price", "bid"]:
-        val = data.get(key)
-        if val not in [None, "", "None"]:
-            return float(val)
-
-    raise Exception("TwelveData quote tidak mengembalikan harga live.")
 
 
 def candle_col(candles, key):
@@ -634,21 +720,32 @@ def candles_tail(candles, n):
 
 
 
+
 def get_market_analysis(pair_key, tf_key):
     """
-    CAPITAL ELITE INSTITUTIONAL ENGINE
-    Source data: TwelveData Spot/FX/Crypto/Index.
-    Metode utama: SMC + ICT + WCO tanpa EMA/RSI.
+    CAPITAL ELITE PRECISION ENTRY ENGINE
+    Source: TwelveData live quote + candle.
+    Entry hanya keluar kalau ada sweep -> displacement -> MSS -> POI overlap.
     """
     pair = PAIRS[pair_key]
     tf_key = str(tf_key).upper().strip()
     if tf_key not in TIMEFRAMES:
         tf_key = "M5"
 
-    cache_key = f"TD_INSTITUTIONAL_{pair_key}_{tf_key}"
+    # realtime: jangan pakai cache untuk entry
+    cache_key = f"PRECISION_{pair_key}_{tf_key}"
     cached_result = cache_get(cache_key)
     if cached_result:
         return cached_result
+
+    def tail(candles, n):
+        return candles[-n:] if len(candles) >= n else candles
+
+    def highs(candles):
+        return [float(c["High"]) for c in candles]
+
+    def lows(candles):
+        return [float(c["Low"]) for c in candles]
 
     def price_now(candles):
         return float(candles[-1]["Close"])
@@ -662,294 +759,306 @@ def get_market_analysis(pair_key, tf_key):
     def candle_direction(c):
         return "BULLISH" if float(c["Close"]) > float(c["Open"]) else "BEARISH"
 
+    def avg_range(candles, n=20):
+        cs = tail(candles, n)
+        return sum(candle_range(c) for c in cs) / max(len(cs), 1)
+
     def swing_high_low(candles, lookback=50):
-        recent = candles_tail(candles, lookback)
-        return max(candle_col(recent, "High")), min(candle_col(recent, "Low"))
+        cs = tail(candles, lookback)
+        return max(highs(cs)), min(lows(cs))
 
-    def htf_bias(candles):
-        hi50, lo50 = swing_high_low(candles, 50)
-        hi20, lo20 = swing_high_low(candles, 20)
-        close = price_now(candles)
-        eq = (hi50 + lo50) / 2
-
-        first = float(candles_tail(candles, 30)[0]["Close"])
-        last = close
-
-        if last > first and close > eq:
+    def structure_bias(candles):
+        if len(candles) < 50:
+            return "SIDEWAYS"
+        hi, lo = swing_high_low(candles, 50)
+        eq = (hi + lo) / 2
+        first = float(tail(candles, 30)[0]["Close"])
+        last = float(candles[-1]["Close"])
+        if last > first and last > eq:
             return "BULLISH"
-        if last < first and close < eq:
-            return "BEARISH"
-        if hi20 > hi50 * 0.995 and close > eq:
-            return "BULLISH"
-        if lo20 < lo50 * 1.005 and close < eq:
+        if last < first and last < eq:
             return "BEARISH"
         return "SIDEWAYS"
 
     def premium_discount(candles):
-        hi, lo = swing_high_low(candles, 50)
+        hi, lo = swing_high_low(candles, 60)
         eq = (hi + lo) / 2
-        price = price_now(candles)
-        if price < eq:
+        p = price_now(candles)
+        if p < eq:
             return "DISCOUNT", eq, hi, lo
-        if price > eq:
+        if p > eq:
             return "PREMIUM", eq, hi, lo
         return "EQ", eq, hi, lo
 
-    def detect_liquidity_sweep(candles):
-        if len(candles) < 35:
-            return None, None
-
-        prev = candles[-31:-1]
-        last = candles[-1]
-        prev_high = max(candle_col(prev, "High"))
-        prev_low = min(candle_col(prev, "Low"))
-        last_high = float(last["High"])
-        last_low = float(last["Low"])
-        last_close = float(last["Close"])
-        last_open = float(last["Open"])
-
-        if last_low < prev_low and last_close > prev_low and last_close > last_open:
-            return "SELLSIDE_SWEEP", last_low
-        if last_high > prev_high and last_close < prev_high and last_close < last_open:
-            return "BUYSIDE_SWEEP", last_high
-        return None, None
-
-    def detect_displacement(candles, direction):
-        last = candles[-1]
-        ranges = [abs(c["High"] - c["Low"]) for c in candles_tail(candles, 20)]
-        avg_range = sum(ranges) / max(len(ranges), 1)
-        rng = candle_range(last)
-        body = body_size(last)
-        direction_now = candle_direction(last)
-
-        if direction == "BUY" and direction_now == "BULLISH" and rng >= avg_range * 1.35 and body >= rng * 0.55:
-            return True
-        if direction == "SELL" and direction_now == "BEARISH" and rng >= avg_range * 1.35 and body >= rng * 0.55:
-            return True
-        return False
-
-    def detect_mss_bos(candles, direction):
-        if len(candles) < 30:
+    def find_recent_sweep(candles, lookback=10):
+        if len(candles) < 45:
             return None
-        recent = candles[-21:-1]
-        last_close = float(candles[-1]["Close"])
-        prev_high = max(candle_col(recent, "High"))
-        prev_low = min(candle_col(recent, "Low"))
-
-        if direction == "BUY" and last_close > prev_high:
-            return "BULLISH_MSS"
-        if direction == "SELL" and last_close < prev_low:
-            return "BEARISH_MSS"
+        for offset in range(1, min(lookback, len(candles)-35) + 1):
+            idx = len(candles) - offset
+            current = candles[idx]
+            prev = candles[idx-31:idx]
+            prev_high = max(highs(prev))
+            prev_low = min(lows(prev))
+            high = float(current["High"])
+            low = float(current["Low"])
+            close = float(current["Close"])
+            open_ = float(current["Open"])
+            if low < prev_low and close > prev_low and close > open_:
+                return {"type": "SELLSIDE_SWEEP", "price": low, "idx": idx, "direction": "BUY"}
+            if high > prev_high and close < prev_high and close < open_:
+                return {"type": "BUYSIDE_SWEEP", "price": high, "idx": idx, "direction": "SELL"}
         return None
 
-    def detect_fvg(candles, direction):
-        avg_ranges = [abs(c["High"] - c["Low"]) for c in candles_tail(candles, 20)]
-        avg_range = sum(avg_ranges) / max(len(avg_ranges), 1)
+    def has_displacement_after(candles, direction, start_idx):
+        avg = avg_range(candles, 20)
+        for i in range(start_idx, len(candles)):
+            c = candles[i]
+            rng = candle_range(c)
+            body = body_size(c)
+            cdir = candle_direction(c)
+            if direction == "BUY" and cdir == "BULLISH" and rng >= avg * 1.25 and body >= rng * 0.50:
+                return True, i
+            if direction == "SELL" and cdir == "BEARISH" and rng >= avg * 1.25 and body >= rng * 0.50:
+                return True, i
+        return False, None
 
-        for i in range(len(candles)-1, max(2, len(candles)-25), -1):
+    def mss_after_sweep(candles, direction, sweep_idx):
+        if sweep_idx is None or sweep_idx < 10:
+            return None
+        before = candles[max(0, sweep_idx-20):sweep_idx]
+        after = candles[sweep_idx:]
+        if len(before) < 5 or len(after) < 2:
+            return None
+        prev_high = max(highs(before))
+        prev_low = min(lows(before))
+        for c in after:
+            close = float(c["Close"])
+            if direction == "BUY" and close > prev_high:
+                return "BULLISH_MSS"
+            if direction == "SELL" and close < prev_low:
+                return "BEARISH_MSS"
+        return None
+
+    def find_fvg_after(candles, direction, start_idx):
+        avg = avg_range(candles, 20)
+        start_idx = max(2, start_idx)
+        for i in range(len(candles)-1, start_idx, -1):
             c0 = candles[i-2]
             c2 = candles[i]
-
             if direction == "BUY":
-                gap_low = float(c0["High"])
-                gap_high = float(c2["Low"])
-                if gap_high > gap_low and (gap_high - gap_low) >= avg_range * 0.12:
-                    return {"type": "BULLISH_FVG", "low": gap_low, "high": gap_high, "mid": (gap_low + gap_high) / 2}
-
+                low = float(c0["High"])
+                high = float(c2["Low"])
+                if high > low and (high - low) >= avg * 0.10:
+                    return {"type": "FVG", "low": low, "high": high, "mid": (low + high) / 2}
             if direction == "SELL":
-                gap_low = float(c2["High"])
-                gap_high = float(c0["Low"])
-                if gap_high > gap_low and (gap_high - gap_low) >= avg_range * 0.12:
-                    return {"type": "BEARISH_FVG", "low": gap_low, "high": gap_high, "mid": (gap_low + gap_high) / 2}
+                low = float(c2["High"])
+                high = float(c0["Low"])
+                if high > low and (high - low) >= avg * 0.10:
+                    return {"type": "FVG", "low": low, "high": high, "mid": (low + high) / 2}
         return None
 
-    def detect_order_block(candles, direction):
-        recent = candles_tail(candles, 25)
-        avg_range = sum([candle_range(c) for c in recent]) / max(len(recent), 1)
-
-        for i in range(len(recent)-3, 3, -1):
-            c = recent[i]
-            nxt = recent[i+1]
-            c_dir = candle_direction(c)
-            nxt_dir = candle_direction(nxt)
-            nxt_range = candle_range(nxt)
-
-            if direction == "BUY" and c_dir == "BEARISH" and nxt_dir == "BULLISH" and nxt_range >= avg_range * 1.15:
-                return {"type": "BULLISH_OB", "low": float(c["Low"]), "high": float(c["Open"]), "mid": (float(c["Low"]) + float(c["Open"])) / 2}
-
-            if direction == "SELL" and c_dir == "BULLISH" and nxt_dir == "BEARISH" and nxt_range >= avg_range * 1.15:
-                return {"type": "BEARISH_OB", "low": float(c["Open"]), "high": float(c["High"]), "mid": (float(c["Open"]) + float(c["High"])) / 2}
+    def find_order_block_after(candles, direction, start_idx):
+        avg = avg_range(candles, 20)
+        start_idx = max(2, start_idx)
+        for i in range(len(candles)-3, start_idx, -1):
+            c = candles[i]
+            nxt = candles[i+1]
+            cdir = candle_direction(c)
+            ndir = candle_direction(nxt)
+            nrng = candle_range(nxt)
+            if direction == "BUY" and cdir == "BEARISH" and ndir == "BULLISH" and nrng >= avg * 1.05:
+                return {"type": "OB", "low": float(c["Low"]), "high": float(c["Open"]), "mid": (float(c["Low"]) + float(c["Open"])) / 2}
+            if direction == "SELL" and cdir == "BULLISH" and ndir == "BEARISH" and nrng >= avg * 1.05:
+                return {"type": "OB", "low": float(c["Open"]), "high": float(c["High"]), "mid": (float(c["Open"]) + float(c["High"])) / 2}
         return None
 
-    def detect_ote(candles, direction):
-        hi, lo = swing_high_low(candles, 40)
+    def ote_zone(candles, direction):
+        hi, lo = swing_high_low(candles, 50)
         rng = max(hi - lo, 0.0001)
-
         if direction == "BUY":
             a = hi - rng * 0.62
             b = hi - rng * 0.79
-            return {"low": min(a, b), "high": max(a, b), "mid": (a + b) / 2}
-
+            return {"type": "OTE", "low": min(a, b), "high": max(a, b), "mid": (a + b) / 2}
         a = lo + rng * 0.62
         b = lo + rng * 0.79
-        return {"low": min(a, b), "high": max(a, b), "mid": (a + b) / 2}
+        return {"type": "OTE", "low": min(a, b), "high": max(a, b), "mid": (a + b) / 2}
 
-    def detect_wco(candles):
-        prev = candles[-31:-1]
-        last = candles[-1]
-        prev_high = max(candle_col(prev, "High"))
-        prev_low = min(candle_col(prev, "Low"))
-        close = float(last["Close"])
-        low = float(last["Low"])
-        high = float(last["High"])
-
-        if low < prev_low and close > prev_low:
-            return "SPRING"
-        if high > prev_high and close < prev_high:
-            return "UPTHRUST"
+    def overlap(a, b):
+        if not a or not b:
+            return None
+        low = max(float(a["low"]), float(b["low"]))
+        high = min(float(a["high"]), float(b["high"]))
+        if high > low:
+            return {"type": f"{a.get('type','ZONE')} + {b.get('type','ZONE')}", "low": low, "high": high, "mid": (low + high) / 2}
         return None
 
-    def overlap_zone(*zones):
-        valid = [z for z in zones if z]
-        if not valid:
-            return None
-        low = max(float(z["low"]) for z in valid)
-        high = min(float(z["high"]) for z in valid)
-        if high > low:
-            return {"low": low, "high": high, "mid": (low + high) / 2, "type": "OVERLAP"}
-        return valid[0]
+    def rr_calc(direction, entry_low, entry_high, sl, tp):
+        if direction == "BUY":
+            risk = max(entry_high - sl, 0.0001)
+            reward = max(tp - entry_high, 0.0001)
+        else:
+            risk = max(sl - entry_low, 0.0001)
+            reward = max(entry_low - tp, 0.0001)
+        return reward / risk
+
+    def risk_pips(pair_key, entry_mid, sl):
+        diff = abs(entry_mid - sl)
+        if pair_key in ["XAUUSD", "XAGUSD"]:
+            return diff * 100
+        if pair_key in ["BTCUSD", "ETHUSD", "NAS100", "US30"]:
+            return diff
+        if pair_key == "USDJPY":
+            return diff * 100
+        return diff * 10000
 
     try:
         c_m1 = fetch_twelvedata_candles(pair_key, "M1", 180)
-        pytime.sleep(0.4)
+        pytime.sleep(0.2)
         c_m5 = fetch_twelvedata_candles(pair_key, "M5", 180)
-        pytime.sleep(0.4)
+        pytime.sleep(0.2)
         c_m15 = fetch_twelvedata_candles(pair_key, "M15", 180)
-        pytime.sleep(0.4)
+        pytime.sleep(0.2)
         c_h1 = fetch_twelvedata_candles(pair_key, "H1", 180)
-        pytime.sleep(0.4)
+        pytime.sleep(0.2)
         c_h4 = fetch_twelvedata_candles(pair_key, "H4", 180)
+        pytime.sleep(0.2)
+        try:
+            live_price, live_source = fetch_realtime_market_price(pair_key)
+        except Exception as quote_error:
+            print("LIVE PRICE FALLBACK:", quote_error)
+            live_price = price_now(c_m5)
+            live_source = "Candle Close Fallback"
     except Exception as e:
         return f"""
 👑 <b>CAPITAL ELITE PROJECT</b>
 
 📡 <b>TwelveData Sync</b>
-Data market belum stabil / API key belum aktif.
+Data market belum stabil / API limit.
 
 Detail:
 <code>{type(e).__name__}: {str(e)[:160]}</code>
 
-Pastikan Railway Variables:
-<code>TD_API_KEY</code>
-
 {disclaimer_footer()}
 """
 
-    try:
-        live_price = fetch_twelvedata_quote(pair_key)
-    except Exception as quote_error:
-        print("TWELVEDATA QUOTE FALLBACK:", quote_error)
-        live_price = price_now(c_m5)
-
     price = float(live_price)
-    h1_bias = htf_bias(c_h1)
-    h4_bias = htf_bias(c_h4)
-    m15_bias = htf_bias(c_m15)
-    m5_bias = htf_bias(c_m5)
+    candle_price = price_now(c_m5)
+    price_offset = price - candle_price
+
+    if tf_key == "M1":
+        exec_c = c_m1
+    elif tf_key in ["M5", "M3"]:
+        exec_c = c_m5
+    else:
+        exec_c = c_m15
+
+    h4_bias = structure_bias(c_h4)
+    h1_bias = structure_bias(c_h1)
+    m15_bias = structure_bias(c_m15)
+    m5_bias = structure_bias(c_m5)
     location, eq, range_high, range_low = premium_discount(c_h1)
 
     hour = wib_now().hour
     if 5 <= hour < 14:
         session_tag = "Asia"
-        session_score = 3
-        killzone = False
+        session_ok = False
     elif 14 <= hour < 20:
         session_tag = "London"
-        session_score = 10
-        killzone = True
+        session_ok = True
     else:
         session_tag = "New York"
-        session_score = 10
-        killzone = True
+        session_ok = True
 
-    buy_base = 0
-    sell_base = 0
-    if h4_bias == "BULLISH": buy_base += 10
-    if h4_bias == "BEARISH": sell_base += 10
-    if h1_bias == "BULLISH": buy_base += 15
-    if h1_bias == "BEARISH": sell_base += 15
-    if m15_bias == "BULLISH": buy_base += 8
-    if m15_bias == "BEARISH": sell_base += 8
-    if location == "DISCOUNT": buy_base += 10
-    if location == "PREMIUM": sell_base += 10
+    if h4_bias == "BULLISH" and h1_bias in ["BULLISH", "SIDEWAYS"]:
+        direction = "BUY"
+    elif h4_bias == "BEARISH" and h1_bias in ["BEARISH", "SIDEWAYS"]:
+        direction = "SELL"
+    else:
+        direction = "BUY" if location == "DISCOUNT" else "SELL"
 
-    direction = "BUY" if buy_base >= sell_base else "SELL"
-
-    sweep, sweep_price = detect_liquidity_sweep(c_m15)
-    wco = detect_wco(c_m15)
-    displacement = detect_displacement(c_m15, direction)
-    mss = detect_mss_bos(c_m15, direction)
-    fvg = detect_fvg(c_m5, direction)
-    ob = detect_order_block(c_m5, direction)
-    ote = detect_ote(c_m15, direction)
-
+    sweep = find_recent_sweep(c_m15, lookback=10)
     score = 0
+    invalid = []
     reasons = []
 
     if direction == "BUY":
-        if h4_bias == "BULLISH" and h1_bias == "BULLISH":
-            score += 20; reasons.append("HTF bullish")
-        elif h1_bias == "BULLISH":
-            score += 12; reasons.append("H1 bullish")
-        if sweep == "SELLSIDE_SWEEP":
-            score += 15; reasons.append("Sell-side sweep")
-        if wco == "SPRING":
-            score += 10; reasons.append("WCO Spring")
-        if location == "DISCOUNT":
-            score += 10; reasons.append("Discount")
+        if h4_bias == "BULLISH": score += 12; reasons.append("H4 Bullish")
+        if h1_bias == "BULLISH": score += 12; reasons.append("H1 Bullish")
+        if m15_bias == "BULLISH": score += 8; reasons.append("M15 Bullish")
+        if location == "DISCOUNT": score += 10; reasons.append("Discount")
+        if not sweep or sweep["direction"] != "BUY":
+            invalid.append("Belum ada sell-side sweep valid")
     else:
-        if h4_bias == "BEARISH" and h1_bias == "BEARISH":
-            score += 20; reasons.append("HTF bearish")
-        elif h1_bias == "BEARISH":
-            score += 12; reasons.append("H1 bearish")
-        if sweep == "BUYSIDE_SWEEP":
-            score += 15; reasons.append("Buy-side sweep")
-        if wco == "UPTHRUST":
-            score += 10; reasons.append("WCO Upthrust")
-        if location == "PREMIUM":
-            score += 10; reasons.append("Premium")
+        if h4_bias == "BEARISH": score += 12; reasons.append("H4 Bearish")
+        if h1_bias == "BEARISH": score += 12; reasons.append("H1 Bearish")
+        if m15_bias == "BEARISH": score += 8; reasons.append("M15 Bearish")
+        if location == "PREMIUM": score += 10; reasons.append("Premium")
+        if not sweep or sweep["direction"] != "SELL":
+            invalid.append("Belum ada buy-side sweep valid")
 
-    if displacement:
-        score += 15; reasons.append("Displacement")
+    if sweep:
+        score += 15
+        reasons.append("Liquidity Sweep")
+        disp, disp_idx = has_displacement_after(c_m15, direction, sweep["idx"])
+        mss = mss_after_sweep(c_m15, direction, sweep["idx"])
+    else:
+        disp, disp_idx, mss = False, None, None
+
+    if disp:
+        score += 15
+        reasons.append("Displacement")
+    else:
+        invalid.append("Belum ada displacement setelah sweep")
+
     if mss:
-        score += 15; reasons.append("MSS/BOS")
-    if fvg:
-        score += 10; reasons.append("FVG")
-    if ob:
-        score += 10; reasons.append("Order Block")
-    if ote:
-        score += 5; reasons.append("OTE")
-    if killzone:
-        score += session_score; reasons.append(f"{session_tag} killzone")
+        score += 15
+        reasons.append("MSS/BOS")
+    else:
+        invalid.append("Belum ada MSS/BOS setelah sweep")
 
-    zone = overlap_zone(fvg, ob, ote)
-    zone_name = "FVG/OB/OTE" if zone else "N/A"
+    start_idx = disp_idx if disp_idx is not None else (sweep["idx"] if sweep else len(exec_c)-20)
+    fvg = find_fvg_after(exec_c, direction, max(2, start_idx - 5))
+    ob = find_order_block_after(exec_c, direction, max(2, start_idx - 8))
+    ote = ote_zone(c_m15, direction)
 
-    invalid = []
-    if score < 80:
-        invalid.append("Score belum masuk high probability")
-    if not sweep:
-        invalid.append("Belum ada liquidity sweep valid")
-    if not displacement:
-        invalid.append("Belum ada displacement kuat")
-    if not mss:
-        invalid.append("Belum ada MSS/BOS valid")
-    if not fvg and not ob:
-        invalid.append("Belum ada FVG/OB valid")
-    if direction == "BUY" and location != "DISCOUNT" and h4_bias != "BULLISH":
-        invalid.append("BUY belum ideal di discount/HTF bullish")
-    if direction == "SELL" and location != "PREMIUM" and h4_bias != "BEARISH":
-        invalid.append("SELL belum ideal di premium/HTF bearish")
+    zone = overlap(fvg, ob)
+    zone_name = "FVG + OB"
+    if not zone:
+        zone = overlap(fvg, ote)
+        zone_name = "FVG + OTE"
+    if not zone:
+        zone = overlap(ob, ote)
+        zone_name = "OB + OTE"
+
+    if fvg: score += 10; reasons.append("FVG")
+    if ob: score += 10; reasons.append("OB")
+    if ote: score += 5; reasons.append("OTE")
+    if session_ok: score += 5; reasons.append(session_tag)
+
+    if not zone:
+        invalid.append("Belum ada overlap FVG/OB/OTE valid")
+
+    atr = avg_range(exec_c, 20)
+    if zone:
+        zone = apply_price_offset_to_zone(zone, price_offset)
+
+    if zone:
+        zone_mid = float(zone["mid"])
+        if direction == "BUY" and zone_mid > eq:
+            invalid.append("POI BUY tidak di discount zone")
+        if direction == "SELL" and zone_mid < eq:
+            invalid.append("POI SELL tidak di premium zone")
+
+        max_distance = max(atr * 1.2, 0.60 if pair_key == "XAUUSD" else 0.0008)
+        if abs(zone_mid - price) > max_distance:
+            invalid.append("POI terlalu jauh dari harga realtime")
+        if direction == "BUY" and price > float(zone["high"]) + atr * 1.2:
+            invalid.append("Harga sudah terlalu jauh di atas entry zone")
+        if direction == "SELL" and price < float(zone["low"]) - atr * 1.2:
+            invalid.append("Harga sudah terlalu jauh di bawah entry zone")
+
+    if score < 85:
+        invalid.append("Score belum cukup untuk precision entry")
 
     if invalid:
         invalid_text = "\n".join([f"• {x}" for x in invalid[:5]])
@@ -958,8 +1067,8 @@ Pastikan Railway Variables:
 
 💰 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
 📍 Price: <code>{fmt(price)}</code>
-📡 Source: <b>TwelveData Live Quote</b>
 ⏱️ Update: <b>{wib_now().strftime("%H:%M:%S WIB")}</b>
+📡 Price Source: <b>{live_source}</b>
 
 📊 Score: <b>{min(score, 99)}/100</b>
 🧭 Bias: <b>{direction}</b>
@@ -970,8 +1079,7 @@ Pastikan Railway Variables:
 {invalid_text}
 
 Rule:
-SMC + ICT + WCO belum lengkap.
-Tunggu sweep + displacement + MSS + FVG/OB.
+Entry hanya muncul kalau POI dekat harga realtime + sweep → displacement → MSS → overlap POI.
 
 {disclaimer_footer()}
 """
@@ -980,70 +1088,75 @@ Tunggu sweep + displacement + MSS + FVG/OB.
 
     entry_low = float(zone["low"])
     entry_high = float(zone["high"])
-    zone_mid = float(zone["mid"])
+    entry_mid = (entry_low + entry_high) / 2
 
-    ranges = [abs(c["High"] - c["Low"]) for c in candles_tail(c_m5, 20)]
-    atr_like = sum(ranges) / max(len(ranges), 1)
-    recent_entry = fmt(price)
+    if direction == "BUY":
+        sweep_price_live = float(sweep["price"]) + price_offset
+        m15_lows_live = [x + price_offset for x in lows(tail(c_m15, 30))]
+        sl = min([sweep_price_live] + m15_lows_live + [entry_low]) - atr * 0.45
+        risk = max(entry_high - sl, 0.0001)
+        tp1 = entry_high + risk * 1.3
+        tp2 = entry_high + risk * 2.0
+        m15_highs_live = [x + price_offset for x in highs(tail(c_m15, 50))]
+        tp3 = max(m15_highs_live + [entry_high + risk * 2.5])
+        label = "🟢 BUY PLAN"
+    else:
+        sweep_price_live = float(sweep["price"]) + price_offset
+        m15_highs_live = [x + price_offset for x in highs(tail(c_m15, 30))]
+        sl = max([sweep_price_live] + m15_highs_live + [entry_high]) + atr * 0.45
+        risk = max(sl - entry_low, 0.0001)
+        tp1 = entry_low - risk * 1.3
+        tp2 = entry_low - risk * 2.0
+        m15_lows_live = [x + price_offset for x in lows(tail(c_m15, 50))]
+        tp3 = min(m15_lows_live + [entry_low - risk * 2.5])
+        label = "🔴 SELL PLAN"
 
-    max_dist = max(atr_like * 2.2, 1.2 if pair_key == "XAUUSD" else 0.001)
-    if abs(zone_mid - price) > max_dist:
+    rr = rr_calc(direction, entry_low, entry_high, sl, tp2)
+    rpips = risk_pips(pair_key, entry_mid, sl)
+
+    if rr < 1.8:
         result = f"""
 ⚪ <b>CAPITAL ELITE NO TRADE</b>
 
 💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
 📍 Price: <code>{fmt(price)}</code>
-📡 Source: <b>TwelveData Live Quote</b>
-⏱️ Update: <b>{wib_now().strftime("%H:%M:%S WIB")}</b>
 📊 Score: <b>{min(score, 99)}/100</b>
 
-POI valid tapi terlalu jauh dari harga sekarang.
-Tunggu retrace mendekati zone.
+RR belum ideal.
+⚖️ RR: <b>1:{rr:.2f}</b>
 
 {disclaimer_footer()}
 """
         cache_set(cache_key, result)
         return result
 
-    if direction == "BUY":
-        sl = min(candle_col(candles_tail(c_m15, 30), "Low") + [entry_low]) - atr_like * 0.8
-        risk = max(entry_high - sl, 0.0001)
-        tp1 = entry_high + risk * 1.2
-        tp2 = entry_high + risk * 2.0
-        tp3 = max(candle_col(candles_tail(c_m15, 50), "High") + [entry_high + risk * 2.5])
-        label = "🟢 STRONG BUY"
-    else:
-        sl = max(candle_col(candles_tail(c_m15, 30), "High") + [entry_high]) + atr_like * 0.8
-        risk = max(sl - entry_low, 0.0001)
-        tp1 = entry_low - risk * 1.2
-        tp2 = entry_low - risk * 2.0
-        tp3 = min(candle_col(candles_tail(c_m15, 50), "Low") + [entry_low - risk * 2.5])
-        label = "🔴 STRONG SELL"
-
     grade = "ELITE S+" if score >= 95 else "A+" if score >= 90 else "A"
-    reason_text = " | ".join(reasons[:6])
+    reason_text = " | ".join(reasons[:7])
 
     result_text = f"""
-🎯 <b>CAPITAL ELITE ICT PRO</b>
+🎯 <b>CAPITAL ELITE PRECISION ENTRY</b>
 
 💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
 {label}
 📊 Score: <b>{min(score, 99)}/100</b> | <b>{grade}</b>
-📡 Source: <b>TwelveData Live Quote</b>
 ⏱️ Update: <b>{wib_now().strftime("%H:%M:%S WIB")}</b>
+📡 Price Source: <b>{live_source}</b>
 
 📍 Entry: <code>{fmt(entry_low)} - {fmt(entry_high)}</code>
-📌 Recent: <code>{recent_entry}</code>
-🧩 Zone: <b>{zone_name}</b>
+📌 Recent: <code>{fmt(price)}</code>
+🧩 POI: <b>{zone_name}</b>
 
 🛑 SL: <code>{fmt(sl)}</code>
+📏 Risk: <b>{rpips:.0f} pips</b>
+⚖️ RR: <b>1:{rr:.2f}</b>
+
 🎯 TP1: <code>{fmt(tp1)}</code>
 🎯 TP2: <code>{fmt(tp2)}</code>
 🎯 TP3: <code>{fmt(tp3)}</code>
 
 ✅ {reason_text}
 
-⚠️ Tunggu konfirmasi candle M1/M5.
+⚠️ Entry hanya saat harga masuk zone + rejection M1/M5.
 {disclaimer_footer()}
 """
     cache_set(cache_key, result_text)
@@ -2276,7 +2389,7 @@ def should_broadcast_realtime(pair_key, tf_key, analysis_text, cooldown_minutes=
         return False
 
     score = parse_signal_score(analysis_text)
-    if score < 88:
+    if score < 94:
         return False
 
     direction = parse_signal_direction(analysis_text)
