@@ -883,6 +883,46 @@ def get_market_analysis(pair_key, tf_key):
         b = lo + rng * 0.79
         return {"type": "OTE", "low": min(a, b), "high": max(a, b), "mid": (a + b) / 2}
 
+    def crt_zone(candles, direction):
+        """
+        CRT / Candle Range Theory:
+        - BUY: candle berjalan sweep low candle sebelumnya lalu reclaim.
+        - SELL: candle berjalan sweep high candle sebelumnya lalu reject.
+        Entry area pakai 50%-79% area candle range sebelumnya.
+        """
+        if len(candles) < 5:
+            return None, None
+
+        ref = candles[-2]   # candle yang sudah close
+        last = candles[-1]  # candle terbaru
+
+        ref_high = float(ref["High"])
+        ref_low = float(ref["Low"])
+        ref_range = max(ref_high - ref_low, 0.0001)
+        ref_mid = (ref_high + ref_low) / 2
+
+        last_high = float(last["High"])
+        last_low = float(last["Low"])
+        last_close = float(last["Close"])
+
+        if direction == "BUY":
+            swept = last_low < ref_low
+            reclaimed = last_close > ref_low
+            if swept and reclaimed:
+                z1 = ref_low + ref_range * 0.21
+                z2 = ref_mid
+                return {"type": "CRT_BUY", "low": min(z1, z2), "high": max(z1, z2), "mid": (z1 + z2) / 2}, "CRT low sweep + reclaim"
+
+        if direction == "SELL":
+            swept = last_high > ref_high
+            rejected = last_close < ref_high
+            if swept and rejected:
+                z1 = ref_mid
+                z2 = ref_high - ref_range * 0.21
+                return {"type": "CRT_SELL", "low": min(z1, z2), "high": max(z1, z2), "mid": (z1 + z2) / 2}, "CRT high sweep + reject"
+
+        return None, None
+
     def overlap(a, b):
         if not a or not b:
             return None
@@ -1020,6 +1060,7 @@ Detail:
     fvg = find_fvg_after(exec_c, direction, max(2, start_idx - 5))
     ob = find_order_block_after(exec_c, direction, max(2, start_idx - 8))
     ote = ote_zone(c_m15, direction)
+    crt, crt_reason = crt_zone(exec_c, direction)
 
     zone = overlap(fvg, ob)
     zone_name = "FVG + OB"
@@ -1033,7 +1074,21 @@ Detail:
     if fvg: score += 10; reasons.append("FVG")
     if ob: score += 10; reasons.append("OB")
     if ote: score += 5; reasons.append("OTE")
+    if crt:
+        score += 15
+        reasons.append("CRT")
+    else:
+        invalid.append("Belum ada CRT sweep/reclaim valid")
     if session_ok: score += 5; reasons.append(session_tag)
+
+    # CRT dipakai sebagai filter tambahan: entry lebih valid kalau POI overlap dengan CRT range.
+    crt_overlap = overlap(crt, zone) if crt and zone else None
+    if crt_overlap:
+        zone = crt_overlap
+        zone_name = "CRT + " + zone_name
+    elif crt and not zone:
+        zone = crt
+        zone_name = "CRT Zone"
 
     if not zone:
         invalid.append("Belum ada overlap FVG/OB/OTE valid")
@@ -1057,8 +1112,8 @@ Detail:
         if direction == "SELL" and price < float(zone["low"]) - atr * 1.2:
             invalid.append("Harga sudah terlalu jauh di bawah entry zone")
 
-    if score < 85:
-        invalid.append("Score belum cukup untuk precision entry")
+    if score < 88:
+        invalid.append("Score belum cukup untuk CRT precision entry")
 
     if invalid:
         invalid_text = "\n".join([f"• {x}" for x in invalid[:5]])
@@ -1079,7 +1134,7 @@ Detail:
 {invalid_text}
 
 Rule:
-Entry hanya muncul kalau POI dekat harga realtime + sweep → displacement → MSS → overlap POI.
+Entry valid = CRT + POI dekat harga realtime + sweep → displacement → MSS.
 
 {disclaimer_footer()}
 """
@@ -1134,7 +1189,7 @@ RR belum ideal.
     reason_text = " | ".join(reasons[:7])
 
     result_text = f"""
-🎯 <b>CAPITAL ELITE PRECISION ENTRY</b>
+🎯 <b>CAPITAL ELITE CRT ENTRY</b>
 
 💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
 {label}
