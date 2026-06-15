@@ -1216,36 +1216,17 @@ def candles_tail(candles, n):
 
 
 
+
 def get_market_analysis(pair_key, tf_key):
     """
-    CAPITAL ELITE CONFIRMATION ENGINE
-    Logic:
-    - Struktur market cari POI high probability.
-    - POI valid = DIRECT ENTRY AREA.
-    - Entry langsung keluar kalau struktur + POI valid:
-      bullish/bearish engulfing, pin bar/rejection, atau M1 micro MSS.
+    CAPITAL ELITE ALWAYS ENTRY ENGINE
+    Setiap analisa selalu kasih Entry / SL / TP.
+    Jika struktur belum lengkap, status menjadi LOW CONFIDENCE, bukan NO TRADE.
     """
     pair = PAIRS[pair_key]
     tf_key = str(tf_key).upper().strip()
     if tf_key not in TIMEFRAMES:
         tf_key = "M5"
-
-    cache_key = f"CONFIRMATION_ENGINE_{pair_key}_{tf_key}"
-    cached_result = cache_get(cache_key)
-    if cached_result:
-        return cached_result
-
-    if has_high_impact_news_risk():
-        return f"""
-⚪ <b>CAPITAL ELITE NO TRADE</b>
-
-💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
-🚫 <b>High Impact News Risk</b>
-
-Tunggu spread normal + 1-2 candle M5 close setelah news.
-
-{disclaimer_footer()}
-"""
 
     def tail(candles, n):
         return candles[-n:] if len(candles) >= n else candles
@@ -1326,9 +1307,9 @@ Tunggu spread normal + 1-2 candle M5 close setelah news.
             rng = candle_range(c)
             body = body_size(c)
             cdir = candle_direction(c)
-            if direction == "BUY" and cdir == "BULLISH" and rng >= avg * 1.25 and body >= rng * 0.50:
+            if direction == "BUY" and cdir == "BULLISH" and rng >= avg * 1.20 and body >= rng * 0.45:
                 return True, i
-            if direction == "SELL" and cdir == "BEARISH" and rng >= avg * 1.25 and body >= rng * 0.50:
+            if direction == "SELL" and cdir == "BEARISH" and rng >= avg * 1.20 and body >= rng * 0.45:
                 return True, i
         return False, None
 
@@ -1358,12 +1339,12 @@ Tunggu spread normal + 1-2 candle M5 close setelah news.
             if direction == "BUY":
                 low = float(c0["High"])
                 high = float(c2["Low"])
-                if high > low and (high - low) >= avg * 0.10:
+                if high > low and (high - low) >= avg * 0.08:
                     return {"type": "FVG", "low": low, "high": high, "mid": (low + high) / 2}
             if direction == "SELL":
                 low = float(c2["High"])
                 high = float(c0["Low"])
-                if high > low and (high - low) >= avg * 0.10:
+                if high > low and (high - low) >= avg * 0.08:
                     return {"type": "FVG", "low": low, "high": high, "mid": (low + high) / 2}
         return None
 
@@ -1376,9 +1357,9 @@ Tunggu spread normal + 1-2 candle M5 close setelah news.
             cdir = candle_direction(c)
             ndir = candle_direction(nxt)
             nrng = candle_range(nxt)
-            if direction == "BUY" and cdir == "BEARISH" and ndir == "BULLISH" and nrng >= avg * 1.05:
+            if direction == "BUY" and cdir == "BEARISH" and ndir == "BULLISH" and nrng >= avg * 0.90:
                 return {"type": "OB", "low": float(c["Low"]), "high": float(c["Open"]), "mid": (float(c["Low"]) + float(c["Open"])) / 2}
-            if direction == "SELL" and cdir == "BULLISH" and ndir == "BEARISH" and nrng >= avg * 1.05:
+            if direction == "SELL" and cdir == "BULLISH" and ndir == "BEARISH" and nrng >= avg * 0.90:
                 return {"type": "OB", "low": float(c["Open"]), "high": float(c["High"]), "mid": (float(c["Open"]) + float(c["High"])) / 2}
         return None
 
@@ -1425,6 +1406,15 @@ Tunggu spread normal + 1-2 candle M5 close setelah news.
             return {"type": f"{a.get('type','ZONE')} + {b.get('type','ZONE')}", "low": low, "high": high, "mid": (low + high) / 2}
         return None
 
+    def rr_calc(direction, entry_low, entry_high, sl, tp):
+        if direction == "BUY":
+            risk = max(float(entry_high) - float(sl), 0.0001)
+            reward = max(float(tp) - float(entry_high), 0.0001)
+        else:
+            risk = max(float(sl) - float(entry_low), 0.0001)
+            reward = max(float(entry_low) - float(tp), 0.0001)
+        return reward / risk
+
     def risk_pips(pair_key, entry_mid, sl):
         diff = abs(float(entry_mid) - float(sl))
         if pair_key in ["XAUUSD", "XAGUSD"]:
@@ -1435,80 +1425,38 @@ Tunggu spread normal + 1-2 candle M5 close setelah news.
             return diff
         return diff * 10000
 
-    def rr_calc(direction, entry_low, entry_high, sl, tp):
-        if direction == "BUY":
-            risk = max(float(entry_high) - float(sl), 0.0001)
-            reward = max(float(tp) - float(entry_high), 0.0001)
+    def fallback_zone(price, atr, direction, pair_key):
+        # Zona entry dekat harga realtime supaya selalu ada entry.
+        if pair_key == "XAUUSD":
+            width = max(atr * 0.18, 0.20)
+            pullback = max(atr * 0.25, 0.25)
+        elif pair_key in ["BTCUSD", "ETHUSD", "NAS100", "US30"]:
+            width = max(atr * 0.20, price * 0.0007)
+            pullback = max(atr * 0.25, price * 0.0008)
         else:
-            risk = max(float(sl) - float(entry_low), 0.0001)
-            reward = max(float(entry_low) - float(tp), 0.0001)
-        return reward / risk
-
-    def candle_trigger(candles, direction):
-        """
-        Trigger confirmation:
-        BUY  = bullish engulfing / bullish pinbar / rejection wick / micro MSS.
-        SELL = bearish engulfing / bearish pinbar / rejection wick / micro MSS.
-        """
-        if len(candles) < 10:
-            return False, "No trigger"
-
-        last = candles[-1]
-        prev = candles[-2]
-
-        lo = float(last["Low"])
-        hi = float(last["High"])
-        op = float(last["Open"])
-        cl = float(last["Close"])
-        prev_op = float(prev["Open"])
-        prev_cl = float(prev["Close"])
-
-        rng = max(hi - lo, 0.0001)
-        body = abs(cl - op)
-        upper_wick = hi - max(op, cl)
-        lower_wick = min(op, cl) - lo
-
-        recent = candles[-8:-1]
-        recent_high = max(highs(recent))
-        recent_low = min(lows(recent))
-
-        bullish_engulf = cl > op and op <= prev_cl and cl >= prev_op and body >= rng * 0.45
-        bearish_engulf = cl < op and op >= prev_cl and cl <= prev_op and body >= rng * 0.45
-
-        bullish_pin = cl > op and lower_wick >= body * 1.4 and lower_wick >= upper_wick * 1.2
-        bearish_pin = cl < op and upper_wick >= body * 1.4 and upper_wick >= lower_wick * 1.2
-
-        bullish_mss = cl > recent_high
-        bearish_mss = cl < recent_low
+            width = max(atr * 0.20, 0.00025)
+            pullback = max(atr * 0.25, 0.00030)
 
         if direction == "BUY":
-            if bullish_engulf:
-                return True, "Bullish Engulfing"
-            if bullish_pin:
-                return True, "Bullish Rejection Wick"
-            if bullish_mss:
-                return True, "M1/M5 Bullish MSS"
-        if direction == "SELL":
-            if bearish_engulf:
-                return True, "Bearish Engulfing"
-            if bearish_pin:
-                return True, "Bearish Rejection Wick"
-            if bearish_mss:
-                return True, "M1/M5 Bearish MSS"
+            high = price - pullback
+            low = high - width
+        else:
+            low = price + pullback
+            high = low + width
 
-        return False, "Menunggu engulfing / rejection / micro MSS"
+        return {"type": "Realtime Pullback Zone", "low": min(low, high), "high": max(low, high), "mid": (low + high) / 2}
 
     try:
         c_m1 = fetch_twelvedata_candles(pair_key, "M1", 180)
-        pytime.sleep(0.2)
+        pytime.sleep(0.15)
         c_m5 = fetch_twelvedata_candles(pair_key, "M5", 180)
-        pytime.sleep(0.2)
+        pytime.sleep(0.15)
         c_m15 = fetch_twelvedata_candles(pair_key, "M15", 180)
-        pytime.sleep(0.2)
+        pytime.sleep(0.15)
         c_h1 = fetch_twelvedata_candles(pair_key, "H1", 180)
-        pytime.sleep(0.2)
+        pytime.sleep(0.15)
         c_h4 = fetch_twelvedata_candles(pair_key, "H4", 180)
-        pytime.sleep(0.2)
+        pytime.sleep(0.15)
 
         try:
             live_price, live_source = fetch_realtime_market_price(pair_key)
@@ -1541,42 +1489,26 @@ Detail:
     else:
         exec_c = c_m15
 
-    trigger_c = c_m1 if tf_key in ["M1", "M3", "M5"] else c_m5
-
     h4_bias = structure_bias(c_h4)
     h1_bias = structure_bias(c_h1)
     m15_bias = structure_bias(c_m15)
     m5_bias = structure_bias(c_m5)
     location, eq, range_high, range_low = premium_discount(c_h1, price)
 
-    if h4_bias == h1_bias and h4_bias in ["BUY", "SELL"]:
-        direction = h4_bias
+    # Direction: jangan NO TRADE. Pilih arah paling dominan.
+    votes = [h4_bias, h1_bias, m15_bias, m5_bias]
+    buy_votes = votes.count("BUY")
+    sell_votes = votes.count("SELL")
+
+    if buy_votes > sell_votes:
+        direction = "BUY"
+    elif sell_votes > buy_votes:
+        direction = "SELL"
     else:
-        direction = "WAIT"
+        direction = "BUY" if location == "DISCOUNT" else "SELL"
 
     hour = wib_now().hour
     session_tag = "Asia" if 5 <= hour < 14 else "London" if 14 <= hour < 20 else "New York"
-
-    if direction == "WAIT":
-        result = f"""
-⚪ <b>CAPITAL ELITE NO TRADE</b>
-
-💰 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
-📍 Price: <code>{fmt(price)}</code>
-📡 Price Source: <b>{live_source}</b>
-
-Reason:
-• H4/H1 belum searah.
-• H4: <b>{h4_bias}</b>
-• H1: <b>{h1_bias}</b>
-
-Rule:
-Entry hanya saat HTF searah + POI + trigger candle.
-
-{disclaimer_footer()}
-"""
-        cache_set(cache_key, result)
-        return result
 
     sweep = find_recent_sweep(c_m15, lookback=12)
     if sweep:
@@ -1586,63 +1518,52 @@ Entry hanya saat HTF searah + POI + trigger candle.
         disp, disp_idx, mss = False, None, None
 
     start_idx = disp_idx if disp_idx is not None else (sweep["idx"] if sweep else len(exec_c)-20)
+
     fvg = find_fvg_after(exec_c, direction, max(2, start_idx - 5))
     ob = find_order_block_after(exec_c, direction, max(2, start_idx - 8))
     ote = ote_zone(c_m15, direction)
     crt = crt_zone(exec_c, direction)
 
-    score = 0
+    score = 35
     reasons = []
-    invalid = []
 
     if h4_bias == direction:
-        score += 20
-        reasons.append("H4 Bias")
+        score += 12
+        reasons.append("H4 searah")
     if h1_bias == direction:
-        score += 20
-        reasons.append("H1 Bias")
-
+        score += 12
+        reasons.append("H1 searah")
+    if m15_bias == direction:
+        score += 8
+        reasons.append("M15 searah")
     if sweep and sweep["direction"] == direction:
-        score += 20
-        reasons.append("Liquidity Sweep")
-    else:
-        invalid.append("Liquidity sweep belum valid")
-
+        score += 10
+        reasons.append("Liquidity sweep")
     if disp:
-        score += 15
+        score += 8
         reasons.append("Displacement")
-    else:
-        invalid.append("Displacement belum valid")
-
     if mss:
-        score += 15
+        score += 8
         reasons.append("MSS/BOS")
-    else:
-        invalid.append("MSS/BOS belum valid")
-
     if fvg:
-        score += 10
+        score += 7
         reasons.append("FVG")
-    else:
-        invalid.append("FVG belum valid")
-
     if ob:
-        score += 10
+        score += 7
         reasons.append("OB")
-    else:
-        invalid.append("OB belum valid")
-
     if crt:
-        score += 10
+        score += 6
         reasons.append("CRT")
-    else:
-        invalid.append("CRT belum valid")
+    if direction == "BUY" and location == "DISCOUNT":
+        score += 5
+        reasons.append("Discount zone")
+    if direction == "SELL" and location == "PREMIUM":
+        score += 5
+        reasons.append("Premium zone")
 
-    if direction == "BUY" and location != "DISCOUNT":
-        invalid.append("BUY belum berada di discount zone")
-    if direction == "SELL" and location != "PREMIUM":
-        invalid.append("SELL belum berada di premium zone")
+    score = min(score, 95)
 
+    # POI priority, tapi kalau tidak ada tetap fallback.
     poi = overlap(fvg, ob)
     zone_name = "FVG + OB"
     if not poi:
@@ -1651,97 +1572,59 @@ Entry hanya saat HTF searah + POI + trigger candle.
     if not poi:
         poi = overlap(ob, ote)
         zone_name = "OB + OTE"
-
     if crt and poi:
-        zone = overlap(crt, poi)
-        zone_name = "CRT + " + zone_name if zone else zone_name
-    else:
-        zone = None
-
-    if not zone:
-        invalid.append("Belum ada overlap CRT + POI valid")
+        z = overlap(crt, poi)
+        if z:
+            poi = z
+            zone_name = "CRT + " + zone_name
+    elif crt and not poi:
+        poi = crt
+        zone_name = "CRT Zone"
 
     atr = avg_range(exec_c, 20)
-    if zone:
-        zone = apply_price_offset_to_zone(zone, price_offset)
-        zone_mid = float(zone["mid"])
-        max_distance = max(atr * 1.20, 0.60 if pair_key == "XAUUSD" else 0.0008)
 
-        if abs(zone_mid - price) > max_distance:
-            invalid.append("POI jauh dari harga realtime")
-        if direction == "BUY" and price > float(zone["high"]) + atr:
-            invalid.append("Harga sudah terlalu jauh di atas entry zone")
-        if direction == "SELL" and price < float(zone["low"]) - atr:
-            invalid.append("Harga sudah terlalu jauh di bawah entry zone")
-
-    core_valid = (
-        direction in ["BUY", "SELL"]
-        and sweep and sweep["direction"] == direction
-        and disp
-        and mss
-        and fvg
-        and ob
-        and crt
-        and zone
-    )
-
-    if not core_valid:
-        invalid.append("Core setup belum lengkap")
-
-    if score < 85:
-        invalid.append("Score di bawah standar A")
-
-    if invalid:
-        invalid_text = "\n".join([f"• {x}" for x in invalid[:7]])
-        result = f"""
-⚪ <b>CAPITAL ELITE NO TRADE</b>
-
-💰 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
-📍 Price: <code>{fmt(price)}</code>
-⏱️ Update: <b>{wib_now().strftime("%H:%M:%S WIB")}</b>
-📡 Price Source: <b>{live_source}</b>
-
-📊 Score: <b>{min(score, 100)}/100</b>
-🧭 Bias: <b>{direction}</b>
-
-📈 H4: <b>{h4_bias}</b> | H1: <b>{h1_bias}</b>
-📈 M15: <b>{m15_bias}</b> | M5: <b>{m5_bias}</b>
-
-{invalid_text}
-
-Rule:
-NO TRADE kalau struktur belum lengkap.
-
-{disclaimer_footer()}
-"""
-        cache_set(cache_key, result)
-        return result
+    if poi:
+        zone = apply_price_offset_to_zone(poi, price_offset)
+        # Kalau zona terlalu jauh, geser ke fallback dekat harga.
+        max_distance = max(atr * 1.50, 0.80 if pair_key == "XAUUSD" else 0.0009)
+        if abs(float(zone["mid"]) - price) > max_distance:
+            zone = fallback_zone(price, atr, direction, pair_key)
+            zone_name = "Realtime Pullback Zone"
+            score = max(55, score - 12)
+    else:
+        zone = fallback_zone(price, atr, direction, pair_key)
+        zone_name = "Realtime Pullback Zone"
+        score = max(55, score - 15)
+        reasons.append("Entry pakai pullback realtime")
 
     entry_low = float(zone["low"])
     entry_high = float(zone["high"])
     entry_mid = (entry_low + entry_high) / 2
 
-    # Trigger confirmation based on current trigger timeframe.
-    trigger_ok, trigger_name = candle_trigger(trigger_c, direction)
-
     if direction == "BUY":
-        sweep_price_live = float(sweep["price"]) + price_offset
-        m15_lows_live = [x + price_offset for x in lows(tail(c_m15, 30))]
-        sl = min([sweep_price_live] + m15_lows_live + [entry_low]) - atr * 0.35
-        risk = max(entry_high - sl, 0.0001)
-        tp1 = entry_high + risk * 1.25
-        tp2 = entry_high + risk * 2.00
-        tp3 = entry_high + risk * 2.80
-        label = "🟢 BUY"
+        if pair_key == "XAUUSD":
+            sl = entry_mid - 0.40
+            tp1 = entry_mid + 0.60
+            tp2 = entry_mid + 0.90
+            tp3 = entry_mid + 1.20
+        else:
+            sl = entry_mid - max(atr * 0.90, abs(entry_mid) * 0.0012)
+            risk = max(entry_high - sl, 0.0001)
+            tp1 = entry_mid + risk * 1.3
+            tp2 = entry_mid + risk * 2.0
+            tp3 = entry_mid + risk * 2.8
     else:
-        sweep_price_live = float(sweep["price"]) + price_offset
-        m15_highs_live = [x + price_offset for x in highs(tail(c_m15, 30))]
-        sl = max([sweep_price_live] + m15_highs_live + [entry_high]) + atr * 0.35
-        risk = max(sl - entry_low, 0.0001)
-        tp1 = entry_low - risk * 1.25
-        tp2 = entry_low - risk * 2.00
-        tp3 = entry_low - risk * 2.80
-        label = "🔴 SELL"
+        if pair_key == "XAUUSD":
+            sl = entry_mid + 0.40
+            tp1 = entry_mid - 0.60
+            tp2 = entry_mid - 0.90
+            tp3 = entry_mid - 1.20
+        else:
+            sl = entry_mid + max(atr * 0.90, abs(entry_mid) * 0.0012)
+            risk = max(sl - entry_low, 0.0001)
+            tp1 = entry_mid - risk * 1.3
+            tp2 = entry_mid - risk * 2.0
+            tp3 = entry_mid - risk * 2.8
 
     try:
         sl, tp1, tp2, tp3 = apply_xau_fixed_risk_rule(pair_key, direction, entry_low, entry_high, sl, tp1, tp2, tp3)
@@ -1751,51 +1634,28 @@ NO TRADE kalau struktur belum lengkap.
     rr = rr_calc(direction, entry_low, entry_high, sl, tp2)
     rpips = risk_pips(pair_key, entry_mid, sl)
 
-    if rr < 2:
-        result = f"""
-⚪ <b>CAPITAL ELITE NO TRADE</b>
-
-💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
-📍 Price: <code>{fmt(price)}</code>
-📊 Score: <b>{min(score, 100)}/100</b>
-
-RR belum ideal.
-⚖️ RR: <b>1:{rr:.2f}</b>
-
-{disclaimer_footer()}
-"""
-        cache_set(cache_key, result)
-        return result
-
-    if score >= 95:
-        grade = "ELITE S+"
-    elif score >= 90:
-        grade = "A+"
-    elif score >= 85:
-        grade = "A"
-    else:
-        grade = "B"
-
-    reason_text = " | ".join(reasons)
-    risk_note = "🧷 XAU Rule: <b>SL 30-50 pips • TP 60-100 pips</b>\n" if pair_key == "XAUUSD" else ""
-
-    # Direct entry mode:
-    # Tidak menunggu trigger candle. Selama struktur + POI valid, bot langsung kasih area entry.
-    if not trigger_ok:
-        trigger_name = "Direct POI Entry"
-
     trend_text = "BULLISH" if direction == "BUY" else "BEARISH"
     signal_emoji = "🟢" if direction == "BUY" else "🔴"
-    confidence = min(score, 100)
+    confidence = min(score, 95)
     conf_blocks = "⬛" * max(1, int(confidence / 10)) + "⬜" * max(0, 10 - int(confidence / 10))
 
+    if confidence >= 85:
+        status_note = "HIGH PROBABILITY"
+    elif confidence >= 70:
+        status_note = "MEDIUM PROBABILITY"
+    else:
+        status_note = "LOW CONFIDENCE / ENTRY KECIL"
+
+    if not reasons:
+        reasons = ["Struktur market terbaca", "Entry dekat harga realtime"]
+
     ai_reason = (
-        "Market menunjukkan struktur bullish yang valid. Harga berada pada area POI dan masih dekat dengan zona entry. "
-        "Momentum mendukung peluang BUY selama harga tidak menembus area invalidasi."
+        "Market cenderung bullish. Area entry diambil dari zona pullback/POI terdekat agar tidak mengejar harga. "
+        "Gunakan SL dan tunggu harga masuk area entry."
         if direction == "BUY"
         else
-        "Market menunjukkan struktur bearish yang valid. Harga berada pada area POI dan masih dekat dengan zona entry. "
-        "Momentum mendukung peluang SELL selama harga tidak menembus area invalidasi."
+        "Market cenderung bearish. Area entry diambil dari zona pullback/POI terdekat agar tidak mengejar harga. "
+        "Gunakan SL dan tunggu harga masuk area entry."
     )
 
     result_text = f"""
@@ -1812,9 +1672,11 @@ RR belum ideal.
 
 📈 Trend : <b>{trend_text}</b>
 🎯 Confidence : <b>{confidence}%</b> {conf_blocks}
+📌 Status : <b>{status_note}</b>
 
 {signal_emoji} Sinyal : <b>{direction}</b>
 💰 Entry : <code>{fmt(entry_mid)}</code>
+📍 Area : <code>{fmt(entry_low)} - {fmt(entry_high)}</code>
 ⛔ Stop Loss : <code>{fmt(sl)}</code>
 🎯 Take Profit : <code>{fmt(tp2)}</code>
 
@@ -1825,9 +1687,10 @@ RR belum ideal.
 {ai_reason}
 
 Validasi:
-✅ {reason_text}
+✅ {" | ".join(reasons[:6])}
 ⚖️ RR : <b>1:{rr:.2f}</b>
-📌 POI : <b>{zone_name}</b>
+📌 Zone : <b>{zone_name}</b>
+📡 Source : <b>{live_source}</b>
 
 ━━━━━━━━━━━━━━━━━━━━
 ⚠️ <b>DISCLAIMER</b> ⚠️
@@ -1837,7 +1700,6 @@ Trading memiliki risiko tinggi.
 Gunakan stop loss dan money management.
 ━━━━━━━━━━━━━━━━━━━━
 """
-    cache_set(cache_key, result_text)
     return result_text
 
 # ==============================
