@@ -817,7 +817,7 @@ def upgrade_text():
 <b>Rp 399.000</b>
 
 ♾️ <b>LIFETIME ACCESS</b>
-<b>Rp 1.999.000</b>
+<b>Rp 499.000</b>
 
 ✅ Unlimited Signal
 ✅ Auto Sniper Alert
