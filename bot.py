@@ -1221,8 +1221,8 @@ def get_market_analysis(pair_key, tf_key):
     CAPITAL ELITE CONFIRMATION ENGINE
     Logic:
     - Struktur market cari POI high probability.
-    - POI saja = WAIT CONFIRMATION.
-    - Entry hanya muncul kalau ada trigger candle:
+    - POI valid = DIRECT ENTRY AREA.
+    - Entry langsung keluar kalau struktur + POI valid:
       bullish/bearish engulfing, pin bar/rejection, atau M1 micro MSS.
     """
     pair = PAIRS[pair_key]
@@ -1779,44 +1779,13 @@ RR belum ideal.
     reason_text = " | ".join(reasons)
     risk_note = "🧷 XAU Rule: <b>SL 30-50 pips • TP 60-100 pips</b>\n" if pair_key == "XAUUSD" else ""
 
-    # IMPORTANT: POI valid but no candle trigger = WAIT CONFIRMATION, not direct entry.
+    # Direct entry mode:
+    # Tidak menunggu trigger candle. Selama struktur + POI valid, bot langsung kasih area entry.
     if not trigger_ok:
-        result = f"""
-🟡 <b>CAPITAL ELITE WAIT CONFIRMATION</b>
-
-💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
-🧭 Bias: <b>{direction}</b>
-📊 Score: <b>{min(score, 100)}/100</b> | <b>{grade}</b>
-📡 Price Source: <b>{live_source}</b>
-
-📍 POI: <code>{fmt(entry_low)} - {fmt(entry_high)}</code>
-📌 Recent: <code>{fmt(price)}</code>
-🧩 Zone: <b>{zone_name}</b>
-
-❌ <b>Belum Entry</b>
-Trigger ditunggu:
-• Engulfing searah
-• Rejection wick
-• Micro MSS M1/M5
-
-Status:
-<code>{trigger_name}</code>
-
-Jika trigger valid:
-SL: <code>{fmt(sl)}</code>
-TP1: <code>{fmt(tp1)}</code>
-TP2: <code>{fmt(tp2)}</code>
-
-✅ Confluence:
-{reason_text}
-
-{disclaimer_footer()}
-"""
-        cache_set(cache_key, result)
-        return result
+        trigger_name = "Direct POI Entry"
 
     result_text = f"""
-🚨 <b>CAPITAL ELITE ENTRY CONFIRMED</b>
+🎯 <b>CAPITAL ELITE DIRECT ENTRY</b>
 
 💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
 {label}
@@ -1827,7 +1796,7 @@ TP2: <code>{fmt(tp2)}</code>
 
 📍 Entry: <code>{fmt(entry_low)} - {fmt(entry_high)}</code>
 📌 Recent: <code>{fmt(price)}</code>
-🕯 Trigger: <b>{trigger_name}</b>
+🧩 Mode: <b>Direct POI Entry</b>
 🧩 POI: <b>{zone_name}</b>
 
 🛑 SL: <code>{fmt(sl)}</code>
@@ -1841,7 +1810,7 @@ TP2: <code>{fmt(tp2)}</code>
 ✅ Confluence:
 {reason_text}
 
-⚠️ Entry tetap tunggu harga masuk zone, jangan chase candle.
+⚠️ Entry hanya di area. Jangan chase kalau harga sudah jauh dari zone.
 {disclaimer_footer()}
 """
     cache_set(cache_key, result_text)
@@ -2049,7 +2018,7 @@ def main_menu(user_id):
 {access_line}
 
 📊 <b>Market Analysis</b>
-SMC • ICT • CRT • Candle Confirmation
+SMC • ICT • CRT • Direct Entry
 
 🎯 <b>Sniper Engine</b>
 HTF Bias • Sweep • MSS • FVG • OB
