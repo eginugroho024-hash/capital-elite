@@ -86,37 +86,37 @@ Jangan menjanjikan profit pasti.
 
 Format jawaban WAJIB:
 
-ðŸ§  CAPITAL ELITE AI VISION
+🧠 CAPITAL ELITE AI VISION
 
-ðŸ’° Pair/TF:
+💰 Pair/TF:
 [isi]
 
-ðŸ§­ Bias:
+🧭 Bias:
 BUY / SELL / NO TRADE
 
-ðŸ“ Entry:
+📍 Entry:
 [area entry] atau WAIT
 
-ðŸ›‘ SL:
+🛑 SL:
 [level] atau -
 
-ðŸŽ¯ TP1:
+🎯 TP1:
 [level] atau -
 
-ðŸŽ¯ TP2:
+🎯 TP2:
 [level] atau -
 
-ðŸ“Š Probability:
+📊 Probability:
 [0-100]/100
 
-âœ… Reason:
-â€¢ Liquidity:
-â€¢ MSS/BOS:
-â€¢ FVG/OB:
-â€¢ CRT:
-â€¢ Premium/Discount:
+✅ Reason:
+• Liquidity:
+• MSS/BOS:
+• FVG/OB:
+• CRT:
+• Premium/Discount:
 
-âš ï¸ Rule:
+⚠️ Rule:
 Tunggu candle konfirmasi. Not Financial Advice.
 """
 
@@ -124,7 +124,7 @@ Tunggu candle konfirmasi. Not Financial Advice.
 def gemini_vision_review(image_bytes, caption_text=""):
     if not GEMINI_API_KEY:
         return """
-âš ï¸ <b>GEMINI_API_KEY belum diisi.</b>
+⚠️ <b>GEMINI_API_KEY belum diisi.</b>
 
 Tambahkan di Railway Variables:
 <code>GEMINI_API_KEY</code>
@@ -171,34 +171,34 @@ Kalau market di tengah area atau confluence kurang, jawab NO TRADE.
         if r.status_code != 200:
             err = data.get("error", {}).get("message", str(data)) if isinstance(data, dict) else str(data)
             return f"""
-âš ï¸ <b>Gemini Vision Error</b>
+⚠️ <b>Gemini Vision Error</b>
 
 <code>{err[:500]}</code>
 
 Cek:
-â€¢ GEMINI_API_KEY valid
-â€¢ Kuota Gemini masih ada
-â€¢ Model: <code>{GEMINI_MODEL}</code>
+• GEMINI_API_KEY valid
+• Kuota Gemini masih ada
+• Model: <code>{GEMINI_MODEL}</code>
 """
 
         candidates = data.get("candidates", [])
         if not candidates:
-            return "âš ï¸ Gemini tidak mengembalikan hasil. Coba screenshot yang lebih jelas."
+            return "⚠️ Gemini tidak mengembalikan hasil. Coba screenshot yang lebih jelas."
 
         parts = candidates[0].get("content", {}).get("parts", [])
         answer = "".join([p.get("text", "") for p in parts]).strip()
 
         if not answer:
-            return "âš ï¸ Hasil Gemini kosong. Coba screenshot lebih jelas."
+            return "⚠️ Hasil Gemini kosong. Coba screenshot lebih jelas."
 
         if "Not Financial Advice" not in answer and "Financial Advice" not in answer:
-            answer += "\n\nâš ï¸ Not Financial Advice. Trading berisiko tinggi."
+            answer += "\n\n⚠️ Not Financial Advice. Trading berisiko tinggi."
 
         return answer
 
     except Exception as e:
         return f"""
-âš ï¸ <b>Gemini Vision gagal membaca screenshot.</b>
+⚠️ <b>Gemini Vision gagal membaca screenshot.</b>
 
 Detail:
 <code>{type(e).__name__}: {str(e)[:300]}</code>
@@ -214,7 +214,7 @@ async def mentor_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             return
 
         await update.message.reply_text(
-            "ðŸ§  <b>AI Vision sedang membaca chart...</b>\n\nTunggu sebentar.",
+            "🧠 <b>AI Vision sedang membaca chart...</b>\n\nTunggu sebentar.",
             parse_mode="HTML"
         )
 
@@ -227,7 +227,7 @@ async def mentor_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     except Exception as e:
         await update.message.reply_text(
-            f"âš ï¸ AI Vision error:\n<code>{type(e).__name__}: {str(e)[:300]}</code>",
+            f"⚠️ AI Vision error:\n<code>{type(e).__name__}: {str(e)[:300]}</code>",
             parse_mode="HTML"
         )
 
@@ -244,7 +244,7 @@ def next_trade_id():
 
 def parse_analysis_levels(analysis_text):
     clean = re.sub(r"<[^>]+>", "", str(analysis_text))
-    direction = "BUY" if "BUY PLAN" in clean or "STRONG BUY" in clean or "ðŸŸ¢" in clean else "SELL" if "SELL PLAN" in clean or "STRONG SELL" in clean or "ðŸ”´" in clean else "WAIT"
+    direction = "BUY" if "BUY PLAN" in clean or "STRONG BUY" in clean or "🟢" in clean else "SELL" if "SELL PLAN" in clean or "STRONG SELL" in clean or "🔴" in clean else "WAIT"
 
     def find_one(pattern):
         m = re.search(pattern, clean, flags=re.I)
@@ -403,17 +403,17 @@ def performance_summary_text():
     open_count = sum(1 for t in open_trades if t.get("status") == "OPEN")
 
     return f"""
-ðŸ“Š <b>CAPITAL ELITE PERFORMANCE</b>
+📊 <b>CAPITAL ELITE PERFORMANCE</b>
 
 Total Closed: <b>{total_closed}</b>
 Open Trades: <b>{open_count}</b>
 
-âœ… Win: <b>{win}</b>
-âŒ Loss: <b>{loss}</b>
-âž– BE: <b>{be}</b>
+✅ Win: <b>{win}</b>
+❌ Loss: <b>{loss}</b>
+➖ BE: <b>{be}</b>
 
-ðŸ† Winrate: <b>{winrate:.1f}%</b>
-â­ Best Pair: <b>{best_pair}</b>
+🏆 Winrate: <b>{winrate:.1f}%</b>
+⭐ Best Pair: <b>{best_pair}</b>
 
 <i>Stats dihitung dari signal yang berhasil dimonitor TP/SL.</i>
 """
@@ -436,12 +436,12 @@ def signal_risk_text(pair_key, entry_mid, sl, modal=100000, risk_pct=2):
             pips = risk_distance * 10000
 
         return f"""
-ðŸ§® <b>Risk Guide</b>
+🧮 <b>Risk Guide</b>
 Risk jarak: <b>{pips:.0f} pips</b>
 Contoh modal Rp{modal:,.0f}, risk {risk_pct}%:
 Max loss: <b>Rp{risk_money:,.0f}</b>
 
-âš ï¸ Sesuaikan lot dengan broker masing-masing.
+⚠️ Sesuaikan lot dengan broker masing-masing.
 """
     except Exception:
         return ""
@@ -458,10 +458,10 @@ async def open_trades_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("Belum ada trade OPEN yang dimonitor.")
         return
 
-    text = "ðŸ“Œ <b>OPEN TRADE MONITOR</b>\n"
+    text = "📌 <b>OPEN TRADE MONITOR</b>\n"
     for t in active[-15:]:
         text += f"""
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━
 #{t.get('id')} <b>{t.get('pair')}</b> {t.get('direction')} | {t.get('tf')}
 Entry: <code>{fmt(t.get('entry_low'))} - {fmt(t.get('entry_high'))}</code>
 SL: <code>{fmt(t.get('sl'))}</code>
@@ -500,27 +500,27 @@ async def trade_monitor_job(context):
                     t["updated_at"] = wib_now().strftime("%Y-%m-%d %H:%M:%S")
                     changed = True
                     msg = f"""
-ðŸŽ¯ <b>TRADE MANAGEMENT UPDATE</b>
+🎯 <b>TRADE MANAGEMENT UPDATE</b>
 
-Signal #{t.get('id')} â€¢ <b>{pair_key}</b> {t.get('direction')}
-âœ… <b>TP1 HIT</b>
+Signal #{t.get('id')} • <b>{pair_key}</b> {t.get('direction')}
+✅ <b>TP1 HIT</b>
 
 Price: <code>{fmt(price)}</code>
 
 Action:
-âœ… Close partial 50%
-âœ… Geser SL ke BE
-âœ… Sisakan posisi ke TP2/TP3
+✅ Close partial 50%
+✅ Geser SL ke BE
+✅ Sisakan posisi ke TP2/TP3
 """
                 elif hit in ["TP2", "TP3"]:
                     close_trade(t, "WIN", price)
                     t["status"] = "CLOSED"
                     changed = True
                     msg = f"""
-ðŸ† <b>SIGNAL WIN</b>
+🏆 <b>SIGNAL WIN</b>
 
-Signal #{t.get('id')} â€¢ <b>{pair_key}</b> {t.get('direction')}
-âœ… <b>{hit} HIT</b>
+Signal #{t.get('id')} • <b>{pair_key}</b> {t.get('direction')}
+✅ <b>{hit} HIT</b>
 
 Close Price: <code>{fmt(price)}</code>
 Result: <b>WIN</b>
@@ -530,12 +530,12 @@ Result: <b>WIN</b>
                     close_trade(t, result, price)
                     t["status"] = "CLOSED"
                     changed = True
-                    label = "âž– BREAK EVEN / PROTECTED" if result == "BE" else "âŒ SIGNAL LOSS"
+                    label = "➖ BREAK EVEN / PROTECTED" if result == "BE" else "❌ SIGNAL LOSS"
                     msg = f"""
 {label}
 
-Signal #{t.get('id')} â€¢ <b>{pair_key}</b> {t.get('direction')}
-ðŸ›‘ <b>SL HIT</b>
+Signal #{t.get('id')} • <b>{pair_key}</b> {t.get('direction')}
+🛑 <b>SL HIT</b>
 
 Close Price: <code>{fmt(price)}</code>
 Result: <b>{result}</b>
@@ -679,17 +679,17 @@ def has_high_impact_news_risk():
 
 def premium_expire_text(uid, days_left, premium_until):
     return f"""
-â³ <b>CAPITAL ELITE REMINDER</b>
+⏳ <b>CAPITAL ELITE REMINDER</b>
 
 Premium lu akan habis dalam <b>{days_left} hari</b>.
 
 Expired:
 <code>{premium_until}</code>
 
-ðŸ’Ž Perpanjang akses:
+💎 Perpanjang akses:
 {ADMIN_CONTACT}
 
-âš ï¸ <b>Not Financial Advice</b>
+⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
 """
 
@@ -771,16 +771,16 @@ def fmt(x):
 
 def conf_bar(conf):
     full = int(conf / 10)
-    return "â–ˆ" * full + "â–‘" * (10 - full)
+    return "█" * full + "░" * (10 - full)
 
 def disclaimer_footer():
     return """
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”
-âš ï¸ <b>Not Financial Advice</b>
+━━━━━━━━━━━━━━
+⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
 Gunakan Stop Loss.
 Kelola risiko dan modal dengan bijak.
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━
 """
 
 
@@ -1464,9 +1464,9 @@ def get_market_analysis(pair_key, tf_key):
             live_source = "Candle Close Fallback"
     except Exception as e:
         return f"""
-ðŸ‘‘ <b>CAPITAL ELITE PROJECT</b>
+👑 <b>CAPITAL ELITE PROJECT</b>
 
-ðŸ“¡ <b>TwelveData Sync</b>
+📡 <b>TwelveData Sync</b>
 Data market belum stabil / API limit.
 
 Detail:
@@ -1610,25 +1610,25 @@ Detail:
         invalid.append("Score belum cukup untuk CRT precision entry")
 
     if invalid:
-        invalid_text = "\n".join([f"â€¢ {x}" for x in invalid[:5]])
+        invalid_text = "\n".join([f"• {x}" for x in invalid[:5]])
         result = f"""
-âšª <b>CAPITAL ELITE NO TRADE</b>
+⚪ <b>CAPITAL ELITE NO TRADE</b>
 
-ðŸ’° <b>{pair['name']}</b> | <b>{tf_key}</b> â€¢ {session_tag}
-ðŸ“ Price: <code>{fmt(price)}</code>
-â±ï¸ Update: <b>{wib_now().strftime("%H:%M:%S WIB")}</b>
-ðŸ“¡ Price Source: <b>{live_source}</b>
+💰 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session_tag}
+📍 Price: <code>{fmt(price)}</code>
+⏱️ Update: <b>{wib_now().strftime("%H:%M:%S WIB")}</b>
+📡 Price Source: <b>{live_source}</b>
 
-ðŸ“Š Score: <b>{min(score, 99)}/100</b>
-ðŸ§­ Bias: <b>{direction}</b>
+📊 Score: <b>{min(score, 99)}/100</b>
+🧭 Bias: <b>{direction}</b>
 
-ðŸ“ˆ H4: <b>{h4_bias}</b> | H1: <b>{h1_bias}</b>
-ðŸ“ˆ M15: <b>{m15_bias}</b> | M5: <b>{m5_bias}</b>
+📈 H4: <b>{h4_bias}</b> | H1: <b>{h1_bias}</b>
+📈 M15: <b>{m15_bias}</b> | M5: <b>{m5_bias}</b>
 
 {invalid_text}
 
 Rule:
-Entry valid = CRT + POI dekat harga realtime + sweep â†’ displacement â†’ MSS.
+Entry valid = CRT + POI dekat harga realtime + sweep → displacement → MSS.
 
 {disclaimer_footer()}
 """
@@ -1648,7 +1648,7 @@ Entry valid = CRT + POI dekat harga realtime + sweep â†’ displacement â†
         tp2 = entry_high + risk * 2.0
         m15_highs_live = [x + price_offset for x in highs(tail(c_m15, 50))]
         tp3 = max(m15_highs_live + [entry_high + risk * 2.5])
-        label = "ðŸŸ¢ BUY PLAN"
+        label = "🟢 BUY PLAN"
     else:
         sweep_price_live = float(sweep["price"]) + price_offset
         m15_highs_live = [x + price_offset for x in highs(tail(c_m15, 30))]
@@ -1658,21 +1658,21 @@ Entry valid = CRT + POI dekat harga realtime + sweep â†’ displacement â†
         tp2 = entry_low - risk * 2.0
         m15_lows_live = [x + price_offset for x in lows(tail(c_m15, 50))]
         tp3 = min(m15_lows_live + [entry_low - risk * 2.5])
-        label = "ðŸ”´ SELL PLAN"
+        label = "🔴 SELL PLAN"
 
     rr = rr_calc(direction, entry_low, entry_high, sl, tp2)
     rpips = risk_pips(pair_key, entry_mid, sl)
 
     if rr < 1.8:
         result = f"""
-âšª <b>CAPITAL ELITE NO TRADE</b>
+⚪ <b>CAPITAL ELITE NO TRADE</b>
 
-ðŸ’° <b>{pair['name']}</b> | <b>{tf_key}</b>
-ðŸ“ Price: <code>{fmt(price)}</code>
-ðŸ“Š Score: <b>{min(score, 99)}/100</b>
+💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
+📍 Price: <code>{fmt(price)}</code>
+📊 Score: <b>{min(score, 99)}/100</b>
 
 RR belum ideal.
-âš–ï¸ RR: <b>1:{rr:.2f}</b>
+⚖️ RR: <b>1:{rr:.2f}</b>
 
 {disclaimer_footer()}
 """
@@ -1683,29 +1683,29 @@ RR belum ideal.
     reason_text = " | ".join(reasons[:7])
 
     result_text = f"""
-ðŸŽ¯ <b>CAPITAL ELITE CRT ENTRY</b>
+🎯 <b>CAPITAL ELITE CRT ENTRY</b>
 
-ðŸ’° <b>{pair['name']}</b> | <b>{tf_key}</b>
+💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
 {label}
-ðŸ“Š Score: <b>{min(score, 99)}/100</b> | <b>{grade}</b>
-â±ï¸ Update: <b>{wib_now().strftime("%H:%M:%S WIB")}</b>
-ðŸ“¡ Price Source: <b>{live_source}</b>
+📊 Score: <b>{min(score, 99)}/100</b> | <b>{grade}</b>
+⏱️ Update: <b>{wib_now().strftime("%H:%M:%S WIB")}</b>
+📡 Price Source: <b>{live_source}</b>
 
-ðŸ“ Entry: <code>{fmt(entry_low)} - {fmt(entry_high)}</code>
-ðŸ“Œ Recent: <code>{fmt(price)}</code>
-ðŸ§© POI: <b>{zone_name}</b>
+📍 Entry: <code>{fmt(entry_low)} - {fmt(entry_high)}</code>
+📌 Recent: <code>{fmt(price)}</code>
+🧩 POI: <b>{zone_name}</b>
 
-ðŸ›‘ SL: <code>{fmt(sl)}</code>
-ðŸ“ Risk: <b>{rpips:.0f} pips</b>
-âš–ï¸ RR: <b>1:{rr:.2f}</b>
+🛑 SL: <code>{fmt(sl)}</code>
+📏 Risk: <b>{rpips:.0f} pips</b>
+⚖️ RR: <b>1:{rr:.2f}</b>
 
-ðŸŽ¯ TP1: <code>{fmt(tp1)}</code>
-ðŸŽ¯ TP2: <code>{fmt(tp2)}</code>
-ðŸŽ¯ TP3: <code>{fmt(tp3)}</code>
+🎯 TP1: <code>{fmt(tp1)}</code>
+🎯 TP2: <code>{fmt(tp2)}</code>
+🎯 TP3: <code>{fmt(tp3)}</code>
 
-âœ… {reason_text}
+✅ {reason_text}
 
-âš ï¸ Entry hanya saat harga masuk zone + rejection M1/M5.
+⚠️ Entry hanya saat harga masuk zone + rejection M1/M5.
 {disclaimer_footer()}
 """
     cache_set(cache_key, result_text)
@@ -1813,39 +1813,39 @@ def analyze_news_result(news_type, actual, forecast, previous=None):
     now = datetime.now().strftime("%d-%m-%Y %H:%M WIB")
 
     return f"""
-â¬œâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â¬œ
-ðŸš¨ <b>NEWS IMPACT ANALYSIS</b>
-â¬œâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â¬œ
+⬜━━━━━━━━━━━━━━━━━━━━⬜
+🚨 <b>NEWS IMPACT ANALYSIS</b>
+⬜━━━━━━━━━━━━━━━━━━━━⬜
 
-ðŸ“… <b>Waktu</b>     : {now}
-ðŸ“° <b>News</b>      : <b>{news_type.upper()}</b>
-ðŸ“Š <b>Actual</b>    : <code>{actual}</code>
-ðŸ“ˆ <b>Forecast</b>  : <code>{forecast}</code>
-ðŸ“‰ <b>Previous</b>  : <code>{previous if previous else '-'}</code>
+📅 <b>Waktu</b>     : {now}
+📰 <b>News</b>      : <b>{news_type.upper()}</b>
+📊 <b>Actual</b>    : <code>{actual}</code>
+📈 <b>Forecast</b>  : <code>{forecast}</code>
+📉 <b>Previous</b>  : <code>{previous if previous else '-'}</code>
 
-â¬œâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â¬œ
-ðŸ¤– <b>AI VERDICT</b>
-â¬œâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â¬œ
+⬜━━━━━━━━━━━━━━━━━━━━⬜
+🤖 <b>AI VERDICT</b>
+⬜━━━━━━━━━━━━━━━━━━━━⬜
 
-ðŸ’µ <b>USD Bias</b>   : <b>{usd_bias}</b>
-ðŸŽ¯ <b>Confidence</b> : <b>{confidence}%</b> {conf_bar(confidence)}
+💵 <b>USD Bias</b>   : <b>{usd_bias}</b>
+🎯 <b>Confidence</b> : <b>{confidence}%</b> {conf_bar(confidence)}
 
-ðŸ¥‡ XAU/USD : <b>{xau}</b>
-ðŸ¥ˆ XAG/USD : <b>{xag}</b>
-â‚¿ BTC/USD : <b>{btc}</b>
-â™¦ ETH/USD : <b>{eth}</b>
+🥇 XAU/USD : <b>{xau}</b>
+🥈 XAG/USD : <b>{xag}</b>
+₿ BTC/USD : <b>{btc}</b>
+♦ ETH/USD : <b>{eth}</b>
 
-âœ… <b>Reason</b>:
+✅ <b>Reason</b>:
 {market_reason}
 
-â¬œâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â¬œ
-âš ï¸ <b>NEWS TRADING RULE</b>
-â¬œâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â¬œ
+⬜━━━━━━━━━━━━━━━━━━━━⬜
+⚠️ <b>NEWS TRADING RULE</b>
+⬜━━━━━━━━━━━━━━━━━━━━⬜
 
 <i>Jangan entry di detik rilis news.
 Tunggu 1-2 candle M5 close, spread normal, lalu cari retest.</i>
 
-ðŸ¤ <b>Capital Elite Project â€” News Engine</b>
+🤍 <b>Capital Elite Project — News Engine</b>
 """
 
 
@@ -1871,23 +1871,23 @@ def analyze_fomc(tone):
         conf = 65
 
     return f"""
-â¬œâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â¬œ
-ðŸ¦ <b>FOMC IMPACT ANALYSIS</b>
-â¬œâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â¬œ
+⬜━━━━━━━━━━━━━━━━━━━━⬜
+🏦 <b>FOMC IMPACT ANALYSIS</b>
+⬜━━━━━━━━━━━━━━━━━━━━⬜
 
-ðŸ§  <b>Tone</b>      : <b>{tone.upper()}</b>
-ðŸ’µ <b>USD Bias</b>  : <b>{usd}</b>
-ðŸŽ¯ <b>Confidence</b>: <b>{conf}%</b> {conf_bar(conf)}
+🧠 <b>Tone</b>      : <b>{tone.upper()}</b>
+💵 <b>USD Bias</b>  : <b>{usd}</b>
+🎯 <b>Confidence</b>: <b>{conf}%</b> {conf_bar(conf)}
 
-ðŸ¥‡ XAU/USD : <b>{xau}</b>
-ðŸ¥ˆ XAG/USD : <b>{xau}</b>
-â‚¿ BTC/USD : <b>{btc}</b>
-â™¦ ETH/USD : <b>{btc}</b>
+🥇 XAU/USD : <b>{xau}</b>
+🥈 XAG/USD : <b>{xau}</b>
+₿ BTC/USD : <b>{btc}</b>
+♦ ETH/USD : <b>{btc}</b>
 
-âœ… <b>Reason</b>:
+✅ <b>Reason</b>:
 {reason}
 
-âš ï¸ Tunggu 1-2 candle M5 setelah statement/press conference.
+⚠️ Tunggu 1-2 candle M5 setelah statement/press conference.
 """
 
 # ==============================
@@ -1897,46 +1897,46 @@ def main_menu(user_id):
     user = get_user(user_id)
 
     if user["premium"]:
-        status_line = "ðŸ’Ž <b>ELITE MEMBER</b>"
+        status_line = "💎 <b>ELITE MEMBER</b>"
         access_line = "Unlimited signal access"
     else:
         market_left = TRIAL_LIMIT_MARKET - user["market_used"]
         news_left = TRIAL_LIMIT_NEWS - user["news_used"]
-        status_line = "ðŸ†“ <b>TRIAL MODE</b>"
-        access_line = f"Market {market_left}x â€¢ News {news_left}x"
+        status_line = "🆓 <b>TRIAL MODE</b>"
+        access_line = f"Market {market_left}x • News {news_left}x"
 
     text = f"""
-ðŸ‘‘ <b>CAPITAL ELITE PROJECT</b>
+👑 <b>CAPITAL ELITE PROJECT</b>
 <code>AI-Powered Trading Intelligence System</code>
 
 {status_line}
 {access_line}
 
-ðŸ“Š <b>Market Scan</b>
-SMC â€¢ ICT â€¢ CRT â€¢ AI Vision â€¢ Realtime Price
+📊 <b>Market Scan</b>
+SMC • ICT • CRT • AI Vision • Realtime Price
 
-ðŸ§  <b>SMC Engine</b>
-HTF Bias â€¢ Liquidity â€¢ POI â€¢ MSS
+🧠 <b>SMC Engine</b>
+HTF Bias • Liquidity • POI • MSS
 
-ðŸ“° <b>News Desk</b>
-CPI â€¢ NFP â€¢ FOMC â€¢ PMI
+📰 <b>News Desk</b>
+CPI • NFP • FOMC • PMI
 
-ðŸ§  <b>AI Vision</b>
+🧠 <b>AI Vision</b>
 Kirim screenshot chart + caption pair/TF
 
-ðŸŸ¢ <b>Engine Online</b>
+🟢 <b>Engine Online</b>
 Pilih fitur di bawah dan ikuti setup dengan disiplin.
 
-<code>Trade Smart â€¢ Trade Elite</code>
+<code>Trade Smart • Trade Elite</code>
 """
 
     keyboard = [
-        [InlineKeyboardButton("ðŸ“Š Market Analysis", callback_data="menu_market")],
-        [InlineKeyboardButton("ðŸŽ¯ Sniper Scanner", callback_data="sniper_menu")],
-        [InlineKeyboardButton("ðŸ“° News Desk", callback_data="menu_news")],
-        [InlineKeyboardButton("ðŸ“Š Performance", callback_data="performance"), InlineKeyboardButton("ðŸ“Œ Open Trades", callback_data="open_trades")],
-        [InlineKeyboardButton("ðŸ‘¤ Account", callback_data="account")],
-        [InlineKeyboardButton("ðŸ’Ž Premium", callback_data="upgrade")],
+        [InlineKeyboardButton("📊 Market Analysis", callback_data="menu_market")],
+        [InlineKeyboardButton("🎯 Sniper Scanner", callback_data="sniper_menu")],
+        [InlineKeyboardButton("📰 News Desk", callback_data="menu_news")],
+        [InlineKeyboardButton("📊 Performance", callback_data="performance"), InlineKeyboardButton("📌 Open Trades", callback_data="open_trades")],
+        [InlineKeyboardButton("👤 Account", callback_data="account")],
+        [InlineKeyboardButton("💎 Premium", callback_data="upgrade")],
     ]
     return text, InlineKeyboardMarkup(keyboard)
 
@@ -1959,32 +1959,32 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data in ["menu_market", "menu_pairs"]:
         if not can_use_market(user_id):
             await q.edit_message_text(
-                "ðŸ”’ <b>FREE TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses unlimited.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("ðŸ’Ž Upgrade Premium", callback_data="upgrade")]]),
+                "🔒 <b>FREE TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses unlimited.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Upgrade Premium", callback_data="upgrade")]]),
                 parse_mode="HTML"
             )
             return
         keyboard = [
-            [InlineKeyboardButton("ðŸ¥‡ Metals", callback_data="cat_metals"), InlineKeyboardButton("â‚¿ Crypto", callback_data="cat_crypto")],
-            [InlineKeyboardButton("ðŸ’± Forex", callback_data="cat_forex"), InlineKeyboardButton("ðŸ“ˆ Indices", callback_data="cat_indices")],
-            [InlineKeyboardButton("â¬…ï¸ Back", callback_data="back_start")]
+            [InlineKeyboardButton("🥇 Metals", callback_data="cat_metals"), InlineKeyboardButton("₿ Crypto", callback_data="cat_crypto")],
+            [InlineKeyboardButton("💱 Forex", callback_data="cat_forex"), InlineKeyboardButton("📈 Indices", callback_data="cat_indices")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="back_start")]
         ]
-        await q.edit_message_text("ðŸ“Š <b>CAPITAL ELITE MARKET ANALYSIS</b>\n\nPilih kategori market:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        await q.edit_message_text("📊 <b>CAPITAL ELITE MARKET ANALYSIS</b>\n\nPilih kategori market:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data.startswith("cat_"):
         category = data.replace("cat_", "")
         if category == "metals":
-            title = "ðŸ¥‡ Metals"
-            keyboard = [[InlineKeyboardButton("ðŸ¥‡ XAU/USD", callback_data="pair_XAUUSD"), InlineKeyboardButton("ðŸ¥ˆ XAG/USD", callback_data="pair_XAGUSD")],[InlineKeyboardButton("â¬…ï¸ Back", callback_data="menu_market")]]
+            title = "🥇 Metals"
+            keyboard = [[InlineKeyboardButton("🥇 XAU/USD", callback_data="pair_XAUUSD"), InlineKeyboardButton("🥈 XAG/USD", callback_data="pair_XAGUSD")],[InlineKeyboardButton("⬅️ Back", callback_data="menu_market")]]
         elif category == "crypto":
-            title = "â‚¿ Crypto"
-            keyboard = [[InlineKeyboardButton("â‚¿ BTC/USD", callback_data="pair_BTCUSD"), InlineKeyboardButton("â™¦ ETH/USD", callback_data="pair_ETHUSD")],[InlineKeyboardButton("â¬…ï¸ Back", callback_data="menu_market")]]
+            title = "₿ Crypto"
+            keyboard = [[InlineKeyboardButton("₿ BTC/USD", callback_data="pair_BTCUSD"), InlineKeyboardButton("♦ ETH/USD", callback_data="pair_ETHUSD")],[InlineKeyboardButton("⬅️ Back", callback_data="menu_market")]]
         elif category == "forex":
-            title = "ðŸ’± Forex"
-            keyboard = [[InlineKeyboardButton("ðŸ‡ªðŸ‡º EUR/USD", callback_data="pair_EURUSD"), InlineKeyboardButton("ðŸ‡¬ðŸ‡§ GBP/USD", callback_data="pair_GBPUSD")],[InlineKeyboardButton("ðŸ‡¯ðŸ‡µ USD/JPY", callback_data="pair_USDJPY"), InlineKeyboardButton("ðŸ‡¦ðŸ‡º AUD/USD", callback_data="pair_AUDUSD")],[InlineKeyboardButton("â¬…ï¸ Back", callback_data="menu_market")]]
+            title = "💱 Forex"
+            keyboard = [[InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="pair_EURUSD"), InlineKeyboardButton("🇬🇧 GBP/USD", callback_data="pair_GBPUSD")],[InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="pair_USDJPY"), InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="pair_AUDUSD")],[InlineKeyboardButton("⬅️ Back", callback_data="menu_market")]]
         else:
-            title = "ðŸ“ˆ Indices"
-            keyboard = [[InlineKeyboardButton("ðŸ“ˆ NAS100", callback_data="pair_NAS100"), InlineKeyboardButton("ðŸ›ï¸ US30", callback_data="pair_US30")],[InlineKeyboardButton("â¬…ï¸ Back", callback_data="menu_market")]]
+            title = "📈 Indices"
+            keyboard = [[InlineKeyboardButton("📈 NAS100", callback_data="pair_NAS100"), InlineKeyboardButton("🏛️ US30", callback_data="pair_US30")],[InlineKeyboardButton("⬅️ Back", callback_data="menu_market")]]
         await q.edit_message_text(f"{title}\n\nPilih pair/market:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data.startswith("pair_"):
@@ -1993,33 +1993,33 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("M1", callback_data=f"tf_{pair_key}_M1"), InlineKeyboardButton("M5", callback_data=f"tf_{pair_key}_M5"), InlineKeyboardButton("M15", callback_data=f"tf_{pair_key}_M15")],
             [InlineKeyboardButton("M30", callback_data=f"tf_{pair_key}_M30"), InlineKeyboardButton("H1", callback_data=f"tf_{pair_key}_H1"), InlineKeyboardButton("H4", callback_data=f"tf_{pair_key}_H4")],
             [InlineKeyboardButton("DAILY", callback_data=f"tf_{pair_key}_DAILY")],
-            [InlineKeyboardButton("â¬…ï¸ Back", callback_data="menu_market")]
+            [InlineKeyboardButton("⬅️ Back", callback_data="menu_market")]
         ]
-        await q.edit_message_text(f"ðŸ’° <b>{PAIRS[pair_key]['name']}</b>\n\nPilih timeframe analisa:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        await q.edit_message_text(f"💰 <b>{PAIRS[pair_key]['name']}</b>\n\nPilih timeframe analisa:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data.startswith("tf_"):
         if not can_use_market(user_id):
-            await q.edit_message_text("ðŸ”’ <b>FREE TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses unlimited.", parse_mode="HTML")
+            await q.edit_message_text("🔒 <b>FREE TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses unlimited.", parse_mode="HTML")
             return
         parts = data.split("_")
         pair_key, tf_key = parts[1], parts[2]
-        await q.edit_message_text(f"ðŸ” <b>Scanning {PAIRS[pair_key]['name']}</b>\nTF: <b>{tf_key}</b>\n\nFetching realtime quote + validating SMC/ICT/WCO...", parse_mode="HTML")
+        await q.edit_message_text(f"🔍 <b>Scanning {PAIRS[pair_key]['name']}</b>\nTF: <b>{tf_key}</b>\n\nFetching realtime quote + validating SMC/ICT/WCO...", parse_mode="HTML")
         try:
             hasil = get_market_analysis(pair_key, tf_key)
             trade = create_trade_from_analysis(pair_key, tf_key, hasil, source="manual_menu")
             if trade:
-                hasil += f"\n\nðŸ“Œ Signal ID: <b>#{trade['id']}</b>\nBot akan monitor TP/SL otomatis."
+                hasil += f"\n\n📌 Signal ID: <b>#{trade['id']}</b>\nBot akan monitor TP/SL otomatis."
                 hasil += signal_risk_text(pair_key, trade["entry_mid"], trade["sl"])
             add_market_usage(user_id)
             user = get_user(user_id)
             if not user["premium"]:
-                hasil += f"\n\nðŸ†“ Sisa trial market: {TRIAL_LIMIT_MARKET - user['market_used']} analisa"
+                hasil += f"\n\n🆓 Sisa trial market: {TRIAL_LIMIT_MARKET - user['market_used']} analisa"
         except Exception as e:
-            hasil = f"""ðŸ‘‘ <b>CAPITAL ELITE PROJECT</b>\n\nðŸ“¡ <b>Market Data Sync</b>\nSistem sedang validasi data market terbaru.\n\nDetail:\n<code>{type(e).__name__}: {str(e)[:160]}</code>\n\nðŸ”„ Coba klik ulang 30-60 detik lagi.\n\nâš ï¸ <b>Not Financial Advice</b>\nTrading memiliki risiko tinggi."""
+            hasil = f"""👑 <b>CAPITAL ELITE PROJECT</b>\n\n📡 <b>Market Data Sync</b>\nSistem sedang validasi data market terbaru.\n\nDetail:\n<code>{type(e).__name__}: {str(e)[:160]}</code>\n\n🔄 Coba klik ulang 30-60 detik lagi.\n\n⚠️ <b>Not Financial Advice</b>\nTrading memiliki risiko tinggi."""
         keyboard = [
-            [InlineKeyboardButton("ðŸ”„ Refresh", callback_data=f"tf_{pair_key}_{tf_key}")],
-            [InlineKeyboardButton("â±ï¸ Ganti TF", callback_data=f"pair_{pair_key}"), InlineKeyboardButton("ðŸ“Š Market", callback_data="menu_market")],
-            [InlineKeyboardButton("ðŸ  Home", callback_data="back_start")]
+            [InlineKeyboardButton("🔄 Refresh", callback_data=f"tf_{pair_key}_{tf_key}")],
+            [InlineKeyboardButton("⏱️ Ganti TF", callback_data=f"pair_{pair_key}"), InlineKeyboardButton("📊 Market", callback_data="menu_market")],
+            [InlineKeyboardButton("🏠 Home", callback_data="back_start")]
         ]
         await q.edit_message_text(hasil, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
@@ -2027,21 +2027,21 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "sniper_menu":
         if not can_use_market(user_id):
             await q.edit_message_text(
-                "ðŸ”’ <b>TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses Sniper Scanner.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("ðŸ’Ž Upgrade Premium", callback_data="upgrade")]]),
+                "🔒 <b>TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses Sniper Scanner.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Upgrade Premium", callback_data="upgrade")]]),
                 parse_mode="HTML"
             )
             return
         keyboard = [
-            [InlineKeyboardButton("ðŸ¥‡ XAU", callback_data="sniper_XAUUSD"), InlineKeyboardButton("ðŸ¥ˆ XAG", callback_data="sniper_XAGUSD")],
-            [InlineKeyboardButton("â‚¿ BTC", callback_data="sniper_BTCUSD"), InlineKeyboardButton("â™¦ ETH", callback_data="sniper_ETHUSD")],
-            [InlineKeyboardButton("ðŸ‡ªðŸ‡º EUR", callback_data="sniper_EURUSD"), InlineKeyboardButton("ðŸ‡¬ðŸ‡§ GBP", callback_data="sniper_GBPUSD")],
-            [InlineKeyboardButton("ðŸ‡¯ðŸ‡µ JPY", callback_data="sniper_USDJPY"), InlineKeyboardButton("ðŸ‡¦ðŸ‡º AUD", callback_data="sniper_AUDUSD")],
-            [InlineKeyboardButton("ðŸ“ˆ NAS100", callback_data="sniper_NAS100"), InlineKeyboardButton("ðŸ›ï¸ US30", callback_data="sniper_US30")],
-            [InlineKeyboardButton("â¬…ï¸ Back", callback_data="back_start")]
+            [InlineKeyboardButton("🥇 XAU", callback_data="sniper_XAUUSD"), InlineKeyboardButton("🥈 XAG", callback_data="sniper_XAGUSD")],
+            [InlineKeyboardButton("₿ BTC", callback_data="sniper_BTCUSD"), InlineKeyboardButton("♦ ETH", callback_data="sniper_ETHUSD")],
+            [InlineKeyboardButton("🇪🇺 EUR", callback_data="sniper_EURUSD"), InlineKeyboardButton("🇬🇧 GBP", callback_data="sniper_GBPUSD")],
+            [InlineKeyboardButton("🇯🇵 JPY", callback_data="sniper_USDJPY"), InlineKeyboardButton("🇦🇺 AUD", callback_data="sniper_AUDUSD")],
+            [InlineKeyboardButton("📈 NAS100", callback_data="sniper_NAS100"), InlineKeyboardButton("🏛️ US30", callback_data="sniper_US30")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="back_start")]
         ]
         await q.edit_message_text(
-            "ðŸŽ¯ <b>CAPITAL ELITE SNIPER SCANNER</b>\n\nScan multi-timeframe M1 â€¢ M5 â€¢ M15 â€¢ H1 untuk cari confluence.",
+            "🎯 <b>CAPITAL ELITE SNIPER SCANNER</b>\n\nScan multi-timeframe M1 • M5 • M15 • H1 untuk cari confluence.",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
@@ -2049,7 +2049,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("sniper_"):
         pair_key = data.replace("sniper_", "")
         await q.edit_message_text(
-            f"ðŸŽ¯ <b>Scanning {PAIRS[pair_key]['name']}</b>\n\nM1 â€¢ M5 â€¢ M15 â€¢ H1\nMohon tunggu sebentar...",
+            f"🎯 <b>Scanning {PAIRS[pair_key]['name']}</b>\n\nM1 • M5 • M15 • H1\nMohon tunggu sebentar...",
             parse_mode="HTML"
         )
 
@@ -2067,26 +2067,26 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if direction == "BUY":
                 buy_count += 1
-                icon = "ðŸŸ¢ BUY"
+                icon = "🟢 BUY"
             elif direction == "SELL":
                 sell_count += 1
-                icon = "ðŸ”´ SELL"
+                icon = "🔴 SELL"
             elif direction == "NO SETUP":
-                icon = "âšª NO SETUP"
+                icon = "⚪ NO SETUP"
             else:
-                icon = "ðŸŸ¡ MIXED"
+                icon = "🟡 MIXED"
 
             results.append((tf, icon, conf))
             pytime.sleep(1.2)
 
         if buy_count > sell_count:
-            final_bias = "ðŸŸ¢ BUY DOMINANT"
+            final_bias = "🟢 BUY DOMINANT"
             action = "Cari buy setelah retracement / validasi M5."
         elif sell_count > buy_count:
-            final_bias = "ðŸ”´ SELL DOMINANT"
+            final_bias = "🔴 SELL DOMINANT"
             action = "Cari sell setelah pullback / validasi M5."
         else:
-            final_bias = "ðŸŸ¡ MIXED / WAIT"
+            final_bias = "🟡 MIXED / WAIT"
             action = "Market belum satu arah. Jangan maksa entry."
 
         avg_conf = int(total_conf / max(len(scan_tfs), 1))
@@ -2103,72 +2103,72 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         lines = ""
         for tf, icon, conf in results:
-            lines += f"{tf:<4} : <b>{icon}</b> â€¢ {conf}%\n"
+            lines += f"{tf:<4} : <b>{icon}</b> • {conf}%\n"
 
         add_market_usage(user_id)
         user = get_user(user_id)
         trial_note = ""
         if not user["premium"]:
-            trial_note = f"\n\nðŸ†“ Sisa trial market: {TRIAL_LIMIT_MARKET - user['market_used']} analisa"
+            trial_note = f"\n\n🆓 Sisa trial market: {TRIAL_LIMIT_MARKET - user['market_used']} analisa"
 
         text = f"""
-ðŸŽ¯ <b>CAPITAL ELITE SNIPER PRO</b>
+🎯 <b>CAPITAL ELITE SNIPER PRO</b>
 
-ðŸ’° <b>{PAIRS[pair_key]['name']}</b> | <b>{grade}</b>
+💰 <b>{PAIRS[pair_key]['name']}</b> | <b>{grade}</b>
 {final_bias}
-ðŸ“Š Score: <b>{avg_conf}/100</b> | Confluence <b>{confluence}/4</b>
+📊 Score: <b>{avg_conf}/100</b> | Confluence <b>{confluence}/4</b>
 
-{lines}ðŸ“Œ Action: {action}
+{lines}📌 Action: {action}
 
-âš ï¸ Tunggu candle konfirmasi.
+⚠️ Tunggu candle konfirmasi.
 
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”
-âš ï¸ <b>Not Financial Advice</b>
+━━━━━━━━━━━━━━
+⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
 Gunakan Stop Loss.
 Kelola risiko dan modal dengan bijak.
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━
 {trial_note}
 """
         await q.edit_message_text(
             text,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("â¬…ï¸ Kembali", callback_data="back_start")]]),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="back_start")]]),
             parse_mode="HTML"
         )
 
 
     elif data == "menu_news":
         if not can_use_news(user_id):
-            await q.edit_message_text("ðŸš« <b>FREE TRIAL NEWS HABIS</b>\n\nUpgrade premium untuk akses unlimited.", parse_mode="HTML")
+            await q.edit_message_text("🚫 <b>FREE TRIAL NEWS HABIS</b>\n\nUpgrade premium untuk akses unlimited.", parse_mode="HTML")
             return
         keyboard = [
-            [InlineKeyboardButton("ðŸ“… Forex Factory Today", callback_data="news_ff")],
-            [InlineKeyboardButton("ðŸ“Œ Cara Input Manual", callback_data="news_manual_help")],
-            [InlineKeyboardButton("â¬…ï¸ Kembali", callback_data="back_start")]
+            [InlineKeyboardButton("📅 Forex Factory Today", callback_data="news_ff")],
+            [InlineKeyboardButton("📌 Cara Input Manual", callback_data="news_manual_help")],
+            [InlineKeyboardButton("⬅️ Kembali", callback_data="back_start")]
         ]
-        await q.edit_message_text("ðŸ“° <b>NEWS IMPACT ENGINE</b>\n\nPilih menu news:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        await q.edit_message_text("📰 <b>NEWS IMPACT ENGINE</b>\n\nPilih menu news:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data == "news_ff":
         if not can_use_news(user_id):
-            await q.edit_message_text("ðŸš« <b>FREE TRIAL NEWS HABIS</b>\n\nUpgrade premium untuk akses unlimited.", parse_mode="HTML")
+            await q.edit_message_text("🚫 <b>FREE TRIAL NEWS HABIS</b>\n\nUpgrade premium untuk akses unlimited.", parse_mode="HTML")
             return
-        await q.edit_message_text("â³ Mengambil data Forex Factory...")
+        await q.edit_message_text("⏳ Mengambil data Forex Factory...")
         events = parse_forex_factory_today()
         add_news_usage(user_id)
         if events:
-            text = "â¬œâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â¬œ\nðŸ“° <b>FOREX FACTORY TODAY</b>\nâ¬œâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â¬œ\n\n"
+            text = "⬜━━━━━━━━━━━━━━━━━━━━⬜\n📰 <b>FOREX FACTORY TODAY</b>\n⬜━━━━━━━━━━━━━━━━━━━━⬜\n\n"
             text = format_news_result_message(events[:5])
             text += "\nGunakan command manual jika data belum kebaca:\n<code>/news cpi actual=3.2 forecast=3.4 previous=3.5</code>"
         else:
-            text = "âš ï¸ Forex Factory gagal dibaca / tidak ada news USD penting.\n\nGunakan manual:\n<code>/news nfp actual=250 forecast=180 previous=190</code>\n<code>/fomc hawkish</code>"
+            text = "⚠️ Forex Factory gagal dibaca / tidak ada news USD penting.\n\nGunakan manual:\n<code>/news nfp actual=250 forecast=180 previous=190</code>\n<code>/fomc hawkish</code>"
         user = get_user(user_id)
         if not user["premium"]:
-            text += f"\n\nðŸ†“ Sisa trial news: {TRIAL_LIMIT_NEWS - user['news_used']}"
-        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("ðŸ  Menu Utama", callback_data="back_start")]]), parse_mode="HTML")
+            text += f"\n\n🆓 Sisa trial news: {TRIAL_LIMIT_NEWS - user['news_used']}"
+        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu Utama", callback_data="back_start")]]), parse_mode="HTML")
 
     elif data == "news_manual_help":
         text = """
-ðŸ“° <b>MANUAL NEWS ANALYZER</b>
+📰 <b>MANUAL NEWS ANALYZER</b>
 
 Format:
 <code>/news cpi actual=3.2 forecast=3.4 previous=3.5</code>
@@ -2183,13 +2183,13 @@ NFP/PMI tinggi = USD bullish = XAU cenderung bearish.
 FOMC hawkish = USD bullish.
 FOMC dovish = USD bearish.
 """
-        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("â¬…ï¸ Kembali", callback_data="menu_news")]]), parse_mode="HTML")
+        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="menu_news")]]), parse_mode="HTML")
 
 
     elif data == "performance":
         await q.edit_message_text(
             performance_summary_text(),
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("â¬…ï¸ Kembali", callback_data="back_start")]]),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="back_start")]]),
             parse_mode="HTML"
         )
 
@@ -2197,12 +2197,12 @@ FOMC dovish = USD bearish.
         trades = load_json_file(OPEN_TRADES_FILE, [])
         active = [t for t in trades if t.get("status") == "OPEN"]
         if not active:
-            txt = "ðŸ“Œ <b>OPEN TRADE MONITOR</b>\n\nBelum ada trade OPEN yang dimonitor."
+            txt = "📌 <b>OPEN TRADE MONITOR</b>\n\nBelum ada trade OPEN yang dimonitor."
         else:
-            txt = "ðŸ“Œ <b>OPEN TRADE MONITOR</b>\n"
+            txt = "📌 <b>OPEN TRADE MONITOR</b>\n"
             for t in active[-10:]:
                 txt += f"""
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━
 #{t.get('id')} <b>{t.get('pair')}</b> {t.get('direction')} | {t.get('tf')}
 Entry: <code>{fmt(t.get('entry_low'))} - {fmt(t.get('entry_high'))}</code>
 SL: <code>{fmt(t.get('sl'))}</code>
@@ -2211,17 +2211,17 @@ Status: <b>{t.get('status')}</b>
 """
         await q.edit_message_text(
             txt,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("â¬…ï¸ Kembali", callback_data="back_start")]]),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="back_start")]]),
             parse_mode="HTML"
         )
 
     elif data == "account":
         user = get_user(user_id)
-        status = "ðŸ’Ž PREMIUM" if user["premium"] else "ðŸ†“ FREE TRIAL"
+        status = "💎 PREMIUM" if user["premium"] else "🆓 FREE TRIAL"
         market_left = "Unlimited" if user["premium"] else f"{TRIAL_LIMIT_MARKET - user['market_used']} / {TRIAL_LIMIT_MARKET}"
         news_left = "Unlimited" if user["premium"] else f"{TRIAL_LIMIT_NEWS - user['news_used']} / {TRIAL_LIMIT_NEWS}"
         text = f"""
-ðŸ‘¤ <b>AKUN SAYA</b>
+👤 <b>AKUN SAYA</b>
 
 ID Telegram:
 <code>{user_id}</code>
@@ -2230,46 +2230,46 @@ Status: <b>{status}</b>
 Trial Market: <b>{market_left}</b>
 Trial News: <b>{news_left}</b>
 """
-        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("â¬…ï¸ Kembali", callback_data="back_start")]]), parse_mode="HTML")
+        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="back_start")]]), parse_mode="HTML")
 
     elif data == "upgrade":
         text = f"""
-ðŸ‘‘ <b>CAPITAL ELITE PROJECT</b>
+👑 <b>CAPITAL ELITE PROJECT</b>
 <code>Trading Intelligence System</code>
 
-âšœ <b>MEMBERSHIP PLANS</b>
+⚜ <b>MEMBERSHIP PLANS</b>
 
-ðŸ’Ž <b>ELITE ACCESS â€” 60 HARI</b>
-<s>Rp 499.000</s> ðŸ”¥ <b>Rp 299.000</b>
+💎 <b>ELITE ACCESS — 60 HARI</b>
+<s>Rp 499.000</s> 🔥 <b>Rp 299.000</b>
 
-ðŸ‘‘ <b>VIP ACCESS â€” 90 HARI</b>
+👑 <b>VIP ACCESS — 90 HARI</b>
 <b>Rp 399.000</b>
 
-â™¾ï¸ <b>LIFETIME ACCESS</b>
+♾️ <b>LIFETIME ACCESS</b>
 <b>Rp 1.999.000</b>
 
-âœ… Premium Signal
-âœ… Auto Signal Broadcast
-âœ… Morning Briefing WIB
-âœ… High Impact News Alert
-âœ… Risk Calculator
-âœ… Elite Mindset Broadcast
-âœ… Admin Support
+✅ Premium Signal
+✅ Auto Signal Broadcast
+✅ Morning Briefing WIB
+✅ High Impact News Alert
+✅ Risk Calculator
+✅ Elite Mindset Broadcast
+✅ Admin Support
 
-ðŸ’³ <b>Payment</b>
+💳 <b>Payment</b>
 <code>{PAYMENT_TEXT}</code>
 
-ðŸŽ <b>Mau akses gratis?</b>
-Hubungi Admin â€” S&K berlaku.
+🎁 <b>Mau akses gratis?</b>
+Hubungi Admin — S&K berlaku.
 
-ðŸ“© <b>Admin</b>
+📩 <b>Admin</b>
 {ADMIN_CONTACT}
 
-âš¡ Setelah bayar, kirim bukti transfer.
+⚡ Setelah bayar, kirim bukti transfer.
 
 Klik /pay untuk ajukan aktivasi otomatis ke admin.
 """
-        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("â¬…ï¸ Kembali", callback_data="back_start")]]), parse_mode="HTML")
+        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="back_start")]]), parse_mode="HTML")
 
     elif data == "back_start":
         text, keyboard = main_menu(user_id)
@@ -2302,7 +2302,7 @@ async def manual_analysis_command(update: Update, context: ContextTypes.DEFAULT_
 
     if not can_use_market(user_id):
         await update.message.reply_text(
-            "ðŸ”’ <b>TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses unlimited.\n\nðŸ’¬ Chat Admin: " + ADMIN_CONTACT,
+            "🔒 <b>TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses unlimited.\n\n💬 Chat Admin: " + ADMIN_CONTACT,
             parse_mode="HTML"
         )
         return
@@ -2310,7 +2310,7 @@ async def manual_analysis_command(update: Update, context: ContextTypes.DEFAULT_
     tf_key = normalize_command_tf(context.args, "M5")
 
     await update.message.reply_text(
-        f"ðŸ” <b>CAPITAL ELITE SCANNING</b>\n\nPair: <b>{PAIRS[pair_key]['name']}</b>\nTimeframe: <b>{tf_key}</b>\n\nâš¡ Validating market structure...",
+        f"🔍 <b>CAPITAL ELITE SCANNING</b>\n\nPair: <b>{PAIRS[pair_key]['name']}</b>\nTimeframe: <b>{tf_key}</b>\n\n⚡ Validating market structure...",
         parse_mode="HTML"
     )
 
@@ -2319,7 +2319,7 @@ async def manual_analysis_command(update: Update, context: ContextTypes.DEFAULT_
 
     user = get_user(user_id)
     if not user["premium"]:
-        hasil += f"\n\nðŸ†“ Sisa trial market: {TRIAL_LIMIT_MARKET - user['market_used']} analisa"
+        hasil += f"\n\n🆓 Sisa trial market: {TRIAL_LIMIT_MARKET - user['market_used']} analisa"
 
     await update.message.reply_text(hasil, parse_mode="HTML")
 
@@ -2359,9 +2359,9 @@ def extract_confidence_from_text(text):
 def extract_direction_from_text(text):
     if "NO TRADE" in text or "NO SETUP" in text:
         return "NO SETUP"
-    if "STRONG BUY" in text or "BUY PLAN" in text or "ðŸŸ¢" in text:
+    if "STRONG BUY" in text or "BUY PLAN" in text or "🟢" in text:
         return "BUY"
-    if "STRONG SELL" in text or "SELL PLAN" in text or "ðŸ”´" in text:
+    if "STRONG SELL" in text or "SELL PLAN" in text or "🔴" in text:
         return "SELL"
     return "MIXED"
 
@@ -2371,7 +2371,7 @@ async def sniper_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not can_use_market(user_id):
         await update.message.reply_text(
-            "ðŸ”’ <b>TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses Sniper Scanner.\n\nðŸ’¬ Chat Admin: " + ADMIN_CONTACT,
+            "🔒 <b>TRIAL MARKET HABIS</b>\n\nUpgrade premium untuk akses Sniper Scanner.\n\n💬 Chat Admin: " + ADMIN_CONTACT,
             parse_mode="HTML"
         )
         return
@@ -2388,7 +2388,7 @@ async def sniper_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pair_key = pair_alias.get(raw_pair, "XAUUSD")
 
     await update.message.reply_text(
-        f"ðŸŽ¯ <b>CAPITAL ELITE SNIPER SCANNER</b>\n\nScanning <b>{PAIRS[pair_key]['name']}</b> across M1 â€¢ M5 â€¢ M15 â€¢ H1...\n\nMohon tunggu sebentar.",
+        f"🎯 <b>CAPITAL ELITE SNIPER SCANNER</b>\n\nScanning <b>{PAIRS[pair_key]['name']}</b> across M1 • M5 • M15 • H1...\n\nMohon tunggu sebentar.",
         parse_mode="HTML"
     )
 
@@ -2406,26 +2406,26 @@ async def sniper_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if direction == "BUY":
             buy_count += 1
-            icon = "ðŸŸ¢ BUY"
+            icon = "🟢 BUY"
         elif direction == "SELL":
             sell_count += 1
-            icon = "ðŸ”´ SELL"
+            icon = "🔴 SELL"
         elif direction == "NO SETUP":
-            icon = "âšª NO SETUP"
+            icon = "⚪ NO SETUP"
         else:
-            icon = "ðŸŸ¡ MIXED"
+            icon = "🟡 MIXED"
 
         results.append((tf, icon, conf))
         pytime.sleep(1.2)
 
     if buy_count > sell_count:
-        final_bias = "ðŸŸ¢ BUY DOMINANT"
+        final_bias = "🟢 BUY DOMINANT"
         action = "Cari buy setelah retracement / validasi M5."
     elif sell_count > buy_count:
-        final_bias = "ðŸ”´ SELL DOMINANT"
+        final_bias = "🔴 SELL DOMINANT"
         action = "Cari sell setelah pullback / validasi M5."
     else:
-        final_bias = "ðŸŸ¡ MIXED / WAIT"
+        final_bias = "🟡 MIXED / WAIT"
         action = "Market belum satu arah. Jangan maksa entry."
 
     avg_conf = int(total_conf / max(len(scan_tfs), 1))
@@ -2442,31 +2442,31 @@ async def sniper_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = ""
     for tf, icon, conf in results:
-        lines += f"{tf:<4} : <b>{icon}</b> â€¢ {conf}%\n"
+        lines += f"{tf:<4} : <b>{icon}</b> • {conf}%\n"
 
     add_market_usage(user_id)
     user = get_user(user_id)
     trial_note = ""
     if not user["premium"]:
-        trial_note = f"\n\nðŸ†“ Sisa trial market: {TRIAL_LIMIT_MARKET - user['market_used']} analisa"
+        trial_note = f"\n\n🆓 Sisa trial market: {TRIAL_LIMIT_MARKET - user['market_used']} analisa"
 
     text = f"""
-ðŸŽ¯ <b>CAPITAL ELITE SNIPER PRO</b>
+🎯 <b>CAPITAL ELITE SNIPER PRO</b>
 
-ðŸ’° <b>{PAIRS[pair_key]['name']}</b> | <b>{grade}</b>
+💰 <b>{PAIRS[pair_key]['name']}</b> | <b>{grade}</b>
 {final_bias}
-ðŸ“Š Score: <b>{avg_conf}/100</b> | Confluence <b>{confluence}/4</b>
+📊 Score: <b>{avg_conf}/100</b> | Confluence <b>{confluence}/4</b>
 
-{lines}ðŸ“Œ Action: {action}
+{lines}📌 Action: {action}
 
-âš ï¸ Tunggu candle konfirmasi.
+⚠️ Tunggu candle konfirmasi.
 
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”
-âš ï¸ <b>Not Financial Advice</b>
+━━━━━━━━━━━━━━
+⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
 Gunakan Stop Loss.
 Kelola risiko dan modal dengan bijak.
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━
 {trial_note}
 """
     await update.message.reply_text(text, parse_mode="HTML")
@@ -2474,27 +2474,27 @@ Kelola risiko dan modal dengan bijak.
 
 async def commands_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """
-ðŸ‘‘ <b>CAPITAL ELITE COMMAND CENTER</b>
+👑 <b>CAPITAL ELITE COMMAND CENTER</b>
 
-ðŸ“Š <b>Manual Analysis</b>
-<code>/xau m5</code> â€” Analisa XAUUSD
-<code>/btc h1</code> â€” Analisa BTCUSD
-<code>/eth m15</code> â€” Analisa ETHUSD
-<code>/xag m5</code> â€” Analisa XAGUSD
+📊 <b>Manual Analysis</b>
+<code>/xau m5</code> — Analisa XAUUSD
+<code>/btc h1</code> — Analisa BTCUSD
+<code>/eth m15</code> — Analisa ETHUSD
+<code>/xag m5</code> — Analisa XAGUSD
 
-ðŸŽ¯ <b>Sniper Scanner</b>
-<code>/sniper</code> â€” Scan XAUUSD
-<code>/sniper btc</code> â€” Scan BTCUSD
-<code>/sniper eth</code> â€” Scan ETHUSD
+🎯 <b>Sniper Scanner</b>
+<code>/sniper</code> — Scan XAUUSD
+<code>/sniper btc</code> — Scan BTCUSD
+<code>/sniper eth</code> — Scan ETHUSD
 
-ðŸ›¡ï¸ <b>Risk Calculator</b>
+🛡️ <b>Risk Calculator</b>
 <code>/risk 100000 5</code>
 
-ðŸ“° <b>News</b>
+📰 <b>News</b>
 <code>/news cpi actual=3.2 forecast=3.4</code>
 <code>/fomc hawkish</code>
 
-ðŸ’Ž <b>Membership</b>
+💎 <b>Membership</b>
 Klik menu Upgrade di /start.
 """
     await update.message.reply_text(text, parse_mode="HTML")
@@ -2503,7 +2503,7 @@ Klik menu Upgrade di /start.
 async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not can_use_news(user_id):
-        await update.message.reply_text("ðŸš« Free trial news habis. Upgrade premium untuk akses unlimited.")
+        await update.message.reply_text("🚫 Free trial news habis. Upgrade premium untuk akses unlimited.")
         return
     if len(context.args) < 2:
         await update.message.reply_text("Format: /news cpi actual=3.2 forecast=3.4 previous=3.5")
@@ -2527,7 +2527,7 @@ async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def fomc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not can_use_news(user_id):
-        await update.message.reply_text("ðŸš« Free trial news habis. Upgrade premium untuk akses unlimited.")
+        await update.message.reply_text("🚫 Free trial news habis. Upgrade premium untuk akses unlimited.")
         return
     if len(context.args) < 1:
         await update.message.reply_text("Format: /fomc hawkish atau /fomc dovish")
@@ -2587,7 +2587,7 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_json_file(PENDING_PAYMENT_FILE, pending)
 
     admin_text = f"""
-âœ… <b>PAYMENT APPROVED</b>
+✅ <b>PAYMENT APPROVED</b>
 
 User: <code>{target_id}</code>
 Durasi: <b>{days} hari</b>
@@ -2597,23 +2597,23 @@ Expired: <code>{until.strftime('%Y-%m-%d %H:%M:%S')}</code>
 
     try:
         user_text = f"""
-ðŸ‘‘ <b>CAPITAL ELITE PROJECT</b>
+👑 <b>CAPITAL ELITE PROJECT</b>
 
-âœ… <b>Premium lu sudah aktif</b>
+✅ <b>Premium lu sudah aktif</b>
 
 Durasi: <b>{days} hari</b>
 Expired: <code>{until.strftime('%d %b %Y %H:%M WIB')}</code>
 
 Akses:
-âœ… Manual Analysis
-âœ… Sniper Scanner
-âœ… Auto Signal
-âœ… News Alert
-âœ… Risk Calculator
+✅ Manual Analysis
+✅ Sniper Scanner
+✅ Auto Signal
+✅ News Alert
+✅ Risk Calculator
 
 Trade smart. Manage your risk.
 
-âš ï¸ <b>Not Financial Advice</b>
+⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
 """
         await context.bot.send_message(chat_id=int(target_id), text=user_text, parse_mode="HTML")
@@ -2636,13 +2636,13 @@ async def request_payment_command(update: Update, context: ContextTypes.DEFAULT_
     save_json_file(PENDING_PAYMENT_FILE, pending)
 
     text = f"""
-ðŸ’Ž <b>CAPITAL ELITE PREMIUM REQUEST</b>
+💎 <b>CAPITAL ELITE PREMIUM REQUEST</b>
 
 ID lu:
 <code>{user_id}</code>
 
 Status:
-â³ Menunggu approval admin
+⏳ Menunggu approval admin
 
 Setelah transfer, kirim bukti pembayaran ke:
 {ADMIN_CONTACT}
@@ -2650,14 +2650,14 @@ Setelah transfer, kirim bukti pembayaran ke:
 Admin akan aktifkan premium dengan:
 <code>/approve {user_id}</code>
 
-âš ï¸ <b>Not Financial Advice</b>
+⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
 """
     await update.message.reply_text(text, parse_mode="HTML")
 
     try:
         admin_msg = f"""
-ðŸ§¾ <b>NEW PAYMENT REQUEST</b>
+🧾 <b>NEW PAYMENT REQUEST</b>
 
 Name: <b>{user_name}</b>
 Username: @{username}
@@ -2683,13 +2683,13 @@ async def pending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = []
     for uid, data in pending.items():
         if data.get("status") == "waiting_approval":
-            rows.append(f"â€¢ <code>{uid}</code> â€” {data.get('name','-')} (@{data.get('username','-')})")
+            rows.append(f"• <code>{uid}</code> — {data.get('name','-')} (@{data.get('username','-')})")
 
     if not rows:
         await update.message.reply_text("Tidak ada pending payment.")
         return
 
-    text = "ðŸ§¾ <b>PENDING PAYMENT</b>\n\n" + "\n".join(rows[:80]) + "\n\nApprove pakai:\n<code>/approve ID</code>"
+    text = "🧾 <b>PENDING PAYMENT</b>\n\n" + "\n".join(rows[:80]) + "\n\nApprove pakai:\n<code>/approve ID</code>"
     await update.message.reply_text(text, parse_mode="HTML")
 
 
@@ -2726,7 +2726,7 @@ async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_users(users)
 
     await update.message.reply_text(
-        f"ðŸ‘‘ CAPITAL ELITE PROJECT\n\nUser {target_id} sudah PREMIUM selama {days} hari.\nExpired: {until.strftime('%d-%m-%Y %H:%M')}"
+        f"👑 CAPITAL ELITE PROJECT\n\nUser {target_id} sudah PREMIUM selama {days} hari.\nExpired: {until.strftime('%d-%m-%Y %H:%M')}"
     )
 
 
@@ -2787,21 +2787,21 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     news_today = len(news_sent.get(today_key, []))
 
     text = f"""
-ðŸ‘‘ <b>CAPITAL ELITE ADMIN DASHBOARD</b>
+👑 <b>CAPITAL ELITE ADMIN DASHBOARD</b>
 
-ðŸ‘¥ Total User: <b>{total}</b>
-ðŸ’Ž Premium Aktif: <b>{premium_count}</b>
-ðŸ†“ Trial/Free: <b>{trial_count}</b>
-âŒ› Expired: <b>{expired_count}</b>
+👥 Total User: <b>{total}</b>
+💎 Premium Aktif: <b>{premium_count}</b>
+🆓 Trial/Free: <b>{trial_count}</b>
+⌛ Expired: <b>{expired_count}</b>
 
-ðŸš¨ Signal Log: <b>{len(logs)}</b>
-ðŸ“° News Sent Today: <b>{news_today}</b>
+🚨 Signal Log: <b>{len(logs)}</b>
+📰 News Sent Today: <b>{news_today}</b>
 
-ðŸ“Š Market Trial Limit: <b>{TRIAL_LIMIT_MARKET}</b>
-ðŸ“° News Trial Limit: <b>{TRIAL_LIMIT_NEWS}</b>
+📊 Market Trial Limit: <b>{TRIAL_LIMIT_MARKET}</b>
+📰 News Trial Limit: <b>{TRIAL_LIMIT_NEWS}</b>
 
-âš™ï¸ Engine: <b>ONLINE</b>
-ðŸ•˜ Server Mode: <b>WIB Schedule</b>
+⚙️ Engine: <b>ONLINE</b>
+🕘 Server Mode: <b>WIB Schedule</b>
 """
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -2817,7 +2817,7 @@ async def realtime_status_command(update: Update, context: ContextTypes.DEFAULT_
     pairs = ", ".join(REALTIME_SCAN_PAIRS)
 
     text = f"""
-ðŸ“¡ <b>REALTIME SCANNER STATUS</b>
+📡 <b>REALTIME SCANNER STATUS</b>
 
 Status: <b>ACTIVE</b>
 Interval: <b>{REALTIME_SCAN_INTERVAL} detik</b>
@@ -2830,7 +2830,7 @@ Last Signals:
         text += "\nBelum ada signal realtime."
     else:
         for pair, data in db.items():
-            text += f"\nâ€¢ {pair} â€” Score {data.get('score','-')} â€” {data.get('time','-')}"
+            text += f"\n• {pair} — Score {data.get('score','-')} — {data.get('time','-')}"
 
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -2846,12 +2846,12 @@ async def listpremium_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         u = get_user(int(uid))
         if u.get("premium"):
             until = u.get("premium_until", "LIFETIME")
-            lines.append(f"â€¢ <code>{uid}</code> â€” {until}")
+            lines.append(f"• <code>{uid}</code> — {until}")
 
     if not lines:
         text = "Belum ada user premium aktif."
     else:
-        text = "ðŸ’Ž <b>PREMIUM ACTIVE LIST</b>\n\n" + "\n".join(lines[:80])
+        text = "💎 <b>PREMIUM ACTIVE LIST</b>\n\n" + "\n".join(lines[:80])
 
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -2951,9 +2951,9 @@ def parse_signal_score(text):
 
 def parse_signal_direction(text):
     clean = str(text)
-    if "STRONG BUY" in clean or "BUY PLAN" in clean or "ðŸŸ¢" in clean:
+    if "STRONG BUY" in clean or "BUY PLAN" in clean or "🟢" in clean:
         return "BUY"
-    if "STRONG SELL" in clean or "SELL PLAN" in clean or "ðŸ”´" in clean:
+    if "STRONG SELL" in clean or "SELL PLAN" in clean or "🔴" in clean:
         return "SELL"
     return "WAIT"
 
@@ -3026,11 +3026,11 @@ async def realtime_auto_scanner(context):
                     trade = create_trade_from_analysis(pair_key, REALTIME_SCAN_TF, analysis, source="realtime_auto")
                     tracking_note = ""
                     if trade:
-                        tracking_note = f"\nðŸ“Œ Signal ID: <b>#{trade['id']}</b>\nBot akan monitor TP/SL otomatis.\n"
+                        tracking_note = f"\n📌 Signal ID: <b>#{trade['id']}</b>\nBot akan monitor TP/SL otomatis.\n"
                         tracking_note += signal_risk_text(pair_key, trade["entry_mid"], trade["sl"])
 
-                    msg = f"""ðŸš¨ <b>CAPITAL ELITE REALTIME SIGNAL</b>
-<code>{PAIRS[pair_key]['name']} â€¢ {REALTIME_SCAN_TF} â€¢ Auto Scanner</code>
+                    msg = f"""🚨 <b>CAPITAL ELITE REALTIME SIGNAL</b>
+<code>{PAIRS[pair_key]['name']} • {REALTIME_SCAN_TF} • Auto Scanner</code>
 
 {analysis}
 {tracking_note}
@@ -3082,13 +3082,13 @@ async def auto_signal_broadcast(context):
         log_signal("XAUUSD", "M15", signal_text)
 
         header = """
-ðŸš¨ <b>CAPITAL ELITE AUTO SIGNAL</b>
-<code>XAUUSD Priority Alert â€¢ Auto Broadcast</code>
+🚨 <b>CAPITAL ELITE AUTO SIGNAL</b>
+<code>XAUUSD Priority Alert • Auto Broadcast</code>
 
 """
         text = header + signal_text + """
 
-ðŸ“Œ <b>Auto Signal Note</b>
+📌 <b>Auto Signal Note</b>
 Signal otomatis hanya dikirim saat engine membaca setup yang layak dipantau.
 Gunakan lot kecil dan tetap validasi chart sebelum entry.
 """
@@ -3122,24 +3122,24 @@ async def morning_briefing(context):
                 raw_event = str(ev.get("raw", "-"))
                 wib_time = convert_ff_time_to_wib(raw_event)
                 clean_event = clean_ff_event_text(raw_event)
-                news_lines += f"â€¢ USD {ev.get('impact', 'NEWS')} â€” {wib_time} â€” {clean_event[:90]}\n"
+                news_lines += f"• USD {ev.get('impact', 'NEWS')} — {wib_time} — {clean_event[:90]}\n"
 
         text = f"""
-ðŸŒ… <b>CAPITAL ELITE MORNING BRIEFING</b>
-<code>{today} â€¢ WIB Session Plan</code>
+🌅 <b>CAPITAL ELITE MORNING BRIEFING</b>
+<code>{today} • WIB Session Plan</code>
 
-ðŸ¥‡ <b>XAUUSD Focus</b>
+🥇 <b>XAUUSD Focus</b>
 Lihat bias H1 dan tunggu validasi M15/M5 sebelum entry.
 
-â‚¿ <b>BTCUSD Focus</b>
+₿ <b>BTCUSD Focus</b>
 Pantau risk sentiment dan reaksi terhadap USD news.
 
-ðŸ“° <b>News Watch</b>
+📰 <b>News Watch</b>
 {news_lines}
-ðŸ›¡ï¸ <b>Elite Rule</b>
+🛡️ <b>Elite Rule</b>
 Jangan overlot di awal hari. Tunggu setup, bukan kejar market.
 
-âš ï¸ <b>Not Financial Advice</b>
+⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
 """
         for uid in targets:
@@ -3194,19 +3194,19 @@ async def risk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     risk_money = modal * risk_pct / 100
     daily_max = modal * min(risk_pct * 2, 10) / 100
     text = f"""
-ðŸ‘‘ <b>CAPITAL ELITE PROJECT</b>
+👑 <b>CAPITAL ELITE PROJECT</b>
 
-ðŸ›¡ï¸ <b>Risk Plan</b>
+🛡️ <b>Risk Plan</b>
 Modal: <code>Rp{modal:,.0f}</code>
 Risk: <code>{risk_pct}%</code>
 Max loss/trade: <code>Rp{risk_money:,.0f}</code>
 Max loss harian: <code>Rp{daily_max:,.0f}</code>
 
-ðŸ“Œ <b>Rule akun kecil</b>
-â€¢ Max 2-3 trade/hari
-â€¢ Stop kalau kena 2x SL
-â€¢ Minimal RR 1:2
-â€¢ Jangan overlot buat balas dendam
+📌 <b>Rule akun kecil</b>
+• Max 2-3 trade/hari
+• Stop kalau kena 2x SL
+• Minimal RR 1:2
+• Jangan overlot buat balas dendam
 
 <i>Goal pertama bukan kaya cepat. Goal pertama: akun jangan MC.</i>
 """
@@ -3219,16 +3219,16 @@ async def edukasi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     import random
     tip = random.choice(EDUKASI_TIPS)
     text = f"""
-ðŸ‘‘ <b>CAPITAL ELITE PROJECT</b>
+👑 <b>CAPITAL ELITE PROJECT</b>
 
-ðŸ§  <b>Elite Mindset Drop</b>
+🧠 <b>Elite Mindset Drop</b>
 {tip}
 
-ðŸ“Œ <b>Reminder</b>
+📌 <b>Reminder</b>
 Entry bagus + lot kebesaran = tetap bahaya.
 Jaga risk, biar akun kecil bisa napas.
 
-âš ï¸ Bukan saran finansial.
+⚠️ Bukan saran finansial.
 """
     users = load_users()
     sent = 0
@@ -3252,23 +3252,23 @@ async def marketnews_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             raw_event = str(ev.get("raw", "-"))
             wib_time = convert_ff_time_to_wib(raw_event)
             clean_event = clean_ff_event_text(raw_event)
-            news_lines += f"â€¢ USD {ev.get('impact', 'NEWS')} â€” {wib_time} â€” {clean_event[:90]}\n"
+            news_lines += f"• USD {ev.get('impact', 'NEWS')} — {wib_time} — {clean_event[:90]}\n"
     else:
-        news_lines = "â€¢ Tidak ada data high impact terbaca. Tetap cek kalender manual sebelum entry.\n"
+        news_lines = "• Tidak ada data high impact terbaca. Tetap cek kalender manual sebelum entry.\n"
     today = (datetime.utcnow() + timedelta(hours=7)).strftime("%d %b %Y")
     text = f"""
-ðŸ‘‘ <b>CAPITAL ELITE PROJECT</b>
+👑 <b>CAPITAL ELITE PROJECT</b>
 
-ðŸš¨ <b>Market Brief â€” {today}</b>
+🚨 <b>Market Brief — {today}</b>
 
-ðŸ“° <b>News Watch</b>
+📰 <b>News Watch</b>
 {news_lines}
-ðŸ“Š <b>Trading Note</b>
-â€¢ Hindari entry 5 menit sebelum news besar
-â€¢ Tunggu spread normal
-â€¢ Cari sweep liquidity + retest POI
+📊 <b>Trading Note</b>
+• Hindari entry 5 menit sebelum news besar
+• Tunggu spread normal
+• Cari sweep liquidity + retest POI
 
-âš ï¸ Bukan saran finansial.
+⚠️ Bukan saran finansial.
 """
     users = load_users()
     sent = 0
@@ -3284,33 +3284,33 @@ import random
 
 async def auto_broadcast(context):
     pesan = random.choice([
-        """ðŸ“¢ Mau Akses Bot Analisa Trading?
+        """📢 Mau Akses Bot Analisa Trading?
 
-âœ… Analisa Market Harian
-âœ… Area Entry Potensial
-âœ… Market Outlook
-âœ… Update News Penting
+✅ Analisa Market Harian
+✅ Area Entry Potensial
+✅ Market Outlook
+✅ Update News Penting
 
-ðŸ’¬ Chat Admin untuk mendapatkan akses.
+💬 Chat Admin untuk mendapatkan akses.
 
-âš ï¸ DISCLAIMER
+⚠️ DISCLAIMER
 
 Bukan saran finansial (Not Financial Advice).
 
 Trading forex, crypto, dan instrumen keuangan lainnya memiliki risiko tinggi dan dapat menyebabkan kerugian sebagian maupun seluruh modal.
 """,
 
-        """ðŸš€ Trading Lebih Terarah
+        """🚀 Trading Lebih Terarah
 
 Jangan asal buy atau sell tanpa rencana.
 
-ðŸŽ¯ Tunggu setup
-ðŸŽ¯ Kelola risiko
-ðŸŽ¯ Ikuti disiplin
+🎯 Tunggu setup
+🎯 Kelola risiko
+🎯 Ikuti disiplin
 
-ðŸ’¬ Chat Admin untuk mendapatkan akses.
+💬 Chat Admin untuk mendapatkan akses.
 
-âš ï¸ DISCLAIMER
+⚠️ DISCLAIMER
 
 Bukan saran finansial (Not Financial Advice).
 
@@ -3454,29 +3454,29 @@ def evaluate_news_impact(raw_text):
             if diff > 0:
                 usd_bias = "BEARISH"
                 xau_direction = "BULLISH / BUY BIAS"
-                reason = "Unemployment lebih tinggi dari forecast â†’ ekonomi melemah â†’ USD cenderung melemah â†’ XAU berpotensi naik."
+                reason = "Unemployment lebih tinggi dari forecast → ekonomi melemah → USD cenderung melemah → XAU berpotensi naik."
                 confidence = 82
             elif diff < 0:
                 usd_bias = "BULLISH"
                 xau_direction = "BEARISH / SELL BIAS"
-                reason = "Unemployment lebih rendah dari forecast â†’ tenaga kerja kuat â†’ USD cenderung menguat â†’ XAU berpotensi turun."
+                reason = "Unemployment lebih rendah dari forecast → tenaga kerja kuat → USD cenderung menguat → XAU berpotensi turun."
                 confidence = 82
             else:
-                reason = "Actual sama dengan forecast â†’ tunggu reaksi market."
+                reason = "Actual sama dengan forecast → tunggu reaksi market."
 
         elif news_type in positive_usd_types:
             if diff > 0:
                 usd_bias = "BULLISH"
                 xau_direction = "BEARISH / SELL BIAS"
-                reason = "Actual lebih tinggi dari forecast â†’ USD cenderung menguat â†’ XAU berpotensi tertekan."
+                reason = "Actual lebih tinggi dari forecast → USD cenderung menguat → XAU berpotensi tertekan."
                 confidence = 84
             elif diff < 0:
                 usd_bias = "BEARISH"
                 xau_direction = "BULLISH / BUY BIAS"
-                reason = "Actual lebih rendah dari forecast â†’ USD cenderung melemah â†’ XAU berpotensi naik."
+                reason = "Actual lebih rendah dari forecast → USD cenderung melemah → XAU berpotensi naik."
                 confidence = 84
             else:
-                reason = "Actual sama dengan forecast â†’ potensi market choppy, tunggu candle confirmation."
+                reason = "Actual sama dengan forecast → potensi market choppy, tunggu candle confirmation."
 
         if abs(diff) > 0:
             try:
@@ -3509,8 +3509,8 @@ def evaluate_news_impact(raw_text):
 
 def format_news_result_message(events):
     today = wib_now().strftime("%d %b %Y")
-    text = f"""ðŸ“° <b>CAPITAL ELITE NEWS RESULT</b>
-<code>{today} â€¢ Auto Impact</code>
+    text = f"""📰 <b>CAPITAL ELITE NEWS RESULT</b>
+<code>{today} • Auto Impact</code>
 """
 
     for ev in events[:4]:
@@ -3520,28 +3520,28 @@ def format_news_result_message(events):
         impact = evaluate_news_impact(raw_event)
 
         text += f"""
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”
-ðŸ‡ºðŸ‡¸ <b>USD NEWS</b> â€¢ {wib_time}
-ðŸ“Œ {clean_event[:140]}
+━━━━━━━━━━━━━━
+🇺🇸 <b>USD NEWS</b> • {wib_time}
+📌 {clean_event[:140]}
 
 Actual: <b>{impact['actual']}</b>
 Forecast: <b>{impact['forecast']}</b>
 Previous: <b>{impact['previous']}</b>
 
-ðŸ’µ USD Bias: <b>{impact['usd_bias']}</b>
-ðŸ¥‡ XAUUSD: <b>{impact['xau_direction']}</b>
-ðŸ“Š Confidence: <b>{impact['confidence']}%</b>
+💵 USD Bias: <b>{impact['usd_bias']}</b>
+🥇 XAUUSD: <b>{impact['xau_direction']}</b>
+📊 Confidence: <b>{impact['confidence']}%</b>
 
 {impact['reason']}
 """
 
     text += f"""
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”
-âš ï¸ <b>Execution Rule</b>
+━━━━━━━━━━━━━━
+⚠️ <b>Execution Rule</b>
 Jangan entry di detik rilis.
 Tunggu 1-2 candle M5 close + spread normal.
 
-âš ï¸ <b>Not Financial Advice</b>
+⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
 """
     return text
@@ -3619,22 +3619,22 @@ async def new_york_session_alert(context):
             return
 
         text = """
-ðŸ”¥ <b>CAPITAL ELITE NEW YORK SESSION</b>
-<code>19:00 WIB â€¢ XAUUSD Volatility Watch</code>
+🔥 <b>CAPITAL ELITE NEW YORK SESSION</b>
+<code>19:00 WIB • XAUUSD Volatility Watch</code>
 
-ðŸ‡ºðŸ‡¸ <b>New York Session mulai aktif</b>
+🇺🇸 <b>New York Session mulai aktif</b>
 
 Pantau:
-âœ… Liquidity sweep
-âœ… Reaksi area H1/M15
-âœ… Spread & news USD
-âœ… Jangan overlot di candle impulsif
+✅ Liquidity sweep
+✅ Reaksi area H1/M15
+✅ Spread & news USD
+✅ Jangan overlot di candle impulsif
 
-ðŸ“Œ <b>Elite Rule</b>
+📌 <b>Elite Rule</b>
 Kalau market sudah terbang duluan, jangan dikejar.
 Tunggu retrace atau setup baru.
 
-âš ï¸ <b>Not Financial Advice</b>
+⚠️ <b>Not Financial Advice</b>
 Trading memiliki risiko tinggi.
 """
         for uid in targets:
@@ -3649,7 +3649,7 @@ Trading memiliki risiko tinggi.
 
 async def vision_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """
-ðŸ§  <b>CARA PAKAI AI VISION</b>
+🧠 <b>CARA PAKAI AI VISION</b>
 
 1. Screenshot chart TradingView/MT5.
 2. Kirim ke bot sebagai foto.
@@ -3659,14 +3659,14 @@ atau
 <code>XAUUSD M15</code>
 
 Bot akan review:
-â€¢ BUY / SELL / NO TRADE
-â€¢ Entry
-â€¢ SL
-â€¢ TP
-â€¢ Probability
-â€¢ Alasan SMC/ICT/CRT
+• BUY / SELL / NO TRADE
+• Entry
+• SL
+• TP
+• Probability
+• Alasan SMC/ICT/CRT
 
-âš ï¸ Screenshot harus jelas, harga kanan terlihat, candle terlihat.
+⚠️ Screenshot harus jelas, harga kanan terlihat, candle terlihat.
 """
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -3683,10 +3683,10 @@ def get_market_analysis(pair_key, tf_key):
 
     if has_high_impact_news_risk():
         return f"""
-âšª <b>CAPITAL ELITE NO TRADE</b>
+⚪ <b>CAPITAL ELITE NO TRADE</b>
 
-ðŸ’° <b>{pair['name']}</b> | <b>{tf_key}</b>
-ðŸš« <b>High Impact News Risk</b>
+💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
+🚫 <b>High Impact News Risk</b>
 
 CPI / NFP / FOMC / Rate / Powell terdeteksi.
 Tunggu volatilitas reda + spread normal.
@@ -3801,9 +3801,9 @@ Tunggu volatilitas reda + spread normal.
             print('LIVE PRICE FALLBACK:', e); price, live_source = C(c_m5), 'Candle Close Fallback'
     except Exception as e:
         return f"""
-ðŸ‘‘ <b>CAPITAL ELITE PROJECT</b>
+👑 <b>CAPITAL ELITE PROJECT</b>
 
-ðŸ“¡ <b>Market Sync</b>
+📡 <b>Market Sync</b>
 Data market belum stabil / API limit.
 
 Detail:
@@ -3820,16 +3820,16 @@ Detail:
 
     if not (h4 == h1 and h4 in ['BUY','SELL']):
         return f"""
-âšª <b>CAPITAL ELITE NO TRADE</b>
+⚪ <b>CAPITAL ELITE NO TRADE</b>
 
-ðŸ’° <b>{pair['name']}</b> | <b>{tf_key}</b> â€¢ {session}
-ðŸ“ Price: <code>{fmt(price)}</code>
-ðŸ“¡ Price Source: <b>{live_source}</b>
+💰 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session}
+📍 Price: <code>{fmt(price)}</code>
+📡 Price Source: <b>{live_source}</b>
 
 Reason:
-â€¢ H4/H1 belum searah.
-â€¢ H4: <b>{h4}</b>
-â€¢ H1: <b>{h1}</b>
+• H4/H1 belum searah.
+• H4: <b>{h4}</b>
+• H1: <b>{h1}</b>
 
 {disclaimer_footer()}
 """
@@ -3866,23 +3866,23 @@ Reason:
     if score < 85: invalid.append('Score di bawah standar A')
     if invalid:
         return f"""
-âšª <b>CAPITAL ELITE NO TRADE</b>
+⚪ <b>CAPITAL ELITE NO TRADE</b>
 
-ðŸ’° <b>{pair['name']}</b> | <b>{tf_key}</b> â€¢ {session}
-ðŸ“ Price: <code>{fmt(price)}</code>
-â±ï¸ Update: <b>{wib_now().strftime('%H:%M:%S WIB')}</b>
-ðŸ“¡ Price Source: <b>{live_source}</b>
+💰 <b>{pair['name']}</b> | <b>{tf_key}</b> • {session}
+📍 Price: <code>{fmt(price)}</code>
+⏱️ Update: <b>{wib_now().strftime('%H:%M:%S WIB')}</b>
+📡 Price Source: <b>{live_source}</b>
 
-ðŸ“Š Score: <b>{min(score,100)}/100</b>
-ðŸ§­ Bias: <b>{direction}</b>
+📊 Score: <b>{min(score,100)}/100</b>
+🧭 Bias: <b>{direction}</b>
 
-ðŸ“ˆ H4: <b>{h4}</b> | H1: <b>{h1}</b>
-ðŸ“ˆ M15: <b>{m15}</b> | M5: <b>{m5}</b>
+📈 H4: <b>{h4}</b> | H1: <b>{h1}</b>
+📈 M15: <b>{m15}</b> | M5: <b>{m5}</b>
 
-""" + '\n'.join('â€¢ '+x for x in invalid[:7]) + f"""
+""" + '\n'.join('• '+x for x in invalid[:7]) + f"""
 
 Rule:
-Signal hanya keluar kalau HTF searah + sweep + displacement + MSS + FVG + OB + CRT + RR â‰¥ 1:2.
+Signal hanya keluar kalau HTF searah + sweep + displacement + MSS + FVG + OB + CRT + RR ≥ 1:2.
 
 {disclaimer_footer()}
 """
@@ -3890,55 +3890,55 @@ Signal hanya keluar kalau HTF searah + sweep + displacement + MSS + FVG + OB + C
     el, eh, em = float(zone['low']), float(zone['high']), float(zone['mid'])
     if direction == 'BUY':
         sl = min([float(sw['price'])+price_offset] + [x+price_offset for x in L(tail(c_m15,30))] + [el]) - atr*0.35
-        risk = max(eh-sl,0.0001); tp1, tp2, tp3 = eh+risk*1.25, eh+risk*2, eh+risk*2.8; label='ðŸŸ¢ BUY'
+        risk = max(eh-sl,0.0001); tp1, tp2, tp3 = eh+risk*1.25, eh+risk*2, eh+risk*2.8; label='🟢 BUY'
     else:
         sl = max([float(sw['price'])+price_offset] + [x+price_offset for x in H(tail(c_m15,30))] + [eh]) + atr*0.35
-        risk = max(sl-el,0.0001); tp1, tp2, tp3 = el-risk*1.25, el-risk*2, el-risk*2.8; label='ðŸ”´ SELL'
+        risk = max(sl-el,0.0001); tp1, tp2, tp3 = el-risk*1.25, el-risk*2, el-risk*2.8; label='🔴 SELL'
     try:
         sl, tp1, tp2, tp3 = apply_xau_fixed_risk_rule(pair_key, direction, el, eh, sl, tp1, tp2, tp3)
     except Exception: pass
     rr = rr_calc(direction, el, eh, sl, tp2)
     if rr < 2:
         return f"""
-âšª <b>CAPITAL ELITE NO TRADE</b>
+⚪ <b>CAPITAL ELITE NO TRADE</b>
 
-ðŸ’° <b>{pair['name']}</b> | <b>{tf_key}</b>
-ðŸ“ Price: <code>{fmt(price)}</code>
-ðŸ“Š Score: <b>{min(score,100)}/100</b>
+💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
+📍 Price: <code>{fmt(price)}</code>
+📊 Score: <b>{min(score,100)}/100</b>
 
 RR belum ideal.
-âš–ï¸ RR: <b>1:{rr:.2f}</b>
+⚖️ RR: <b>1:{rr:.2f}</b>
 
 {disclaimer_footer()}
 """
     grade = 'ELITE S+' if score>=95 else 'A+' if score>=90 else 'A'
-    risk_note = "ðŸ§· XAU Rule: <b>SL 30-50 pips â€¢ TP 60-100 pips</b>\n" if pair_key=='XAUUSD' else ''
+    risk_note = "🧷 XAU Rule: <b>SL 30-50 pips • TP 60-100 pips</b>\n" if pair_key=='XAUUSD' else ''
     return f"""
-ðŸŽ¯ <b>CAPITAL ELITE SNIPER</b>
+🎯 <b>CAPITAL ELITE SNIPER</b>
 
-ðŸ’° <b>{pair['name']}</b> | <b>{tf_key}</b>
+💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
 {label}
-ðŸ“Š Score: <b>{min(score,100)}/100</b>
-ðŸ† Grade: <b>{grade}</b>
-â±ï¸ Update: <b>{wib_now().strftime('%H:%M:%S WIB')}</b>
-ðŸ“¡ Price Source: <b>{live_source}</b>
+📊 Score: <b>{min(score,100)}/100</b>
+🏆 Grade: <b>{grade}</b>
+⏱️ Update: <b>{wib_now().strftime('%H:%M:%S WIB')}</b>
+📡 Price Source: <b>{live_source}</b>
 
-ðŸ“ Entry: <code>{fmt(el)} - {fmt(eh)}</code>
-ðŸ“Œ Recent: <code>{fmt(price)}</code>
-ðŸ§© POI: <b>{zone_name}</b>
+📍 Entry: <code>{fmt(el)} - {fmt(eh)}</code>
+📌 Recent: <code>{fmt(price)}</code>
+🧩 POI: <b>{zone_name}</b>
 
-ðŸ›‘ SL: <code>{fmt(sl)}</code>
-ðŸ“ Risk: <b>{rpips(em,sl):.0f} pips</b>
-âš–ï¸ RR: <b>1:{rr:.2f}</b>
+🛑 SL: <code>{fmt(sl)}</code>
+📏 Risk: <b>{rpips(em,sl):.0f} pips</b>
+⚖️ RR: <b>1:{rr:.2f}</b>
 {risk_note}
-ðŸŽ¯ TP1: <code>{fmt(tp1)}</code>
-ðŸŽ¯ TP2: <code>{fmt(tp2)}</code>
-ðŸŽ¯ TP3: <code>{fmt(tp3)}</code>
+🎯 TP1: <code>{fmt(tp1)}</code>
+🎯 TP2: <code>{fmt(tp2)}</code>
+🎯 TP3: <code>{fmt(tp3)}</code>
 
-âœ… Confluence:
+✅ Confluence:
 {' | '.join(reasons)}
 
-âš ï¸ Tunggu harga masuk area entry + rejection M1/M5.
+⚠️ Tunggu harga masuk area entry + rejection M1/M5.
 {disclaimer_footer()}
 """
 
