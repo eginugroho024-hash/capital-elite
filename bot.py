@@ -36,6 +36,7 @@ SIGNAL_LOG_FILE = "signal_log.json"
 TRADE_HISTORY_FILE = "trade_history.json"
 NEWS_SENT_FILE = "news_sent.json"
 ALERT_SENT_FILE = "alert_sent.json"
+PAYMENT_REQUEST_FILE = "payment_requests.json"
 
 MARKET_CACHE = {}
 MARKET_CACHE_SECONDS = 180
@@ -667,6 +668,7 @@ def keyboard_main():
         [InlineKeyboardButton("📈 Dashboard", callback_data="dashboard")],
         [InlineKeyboardButton("📰 News Desk", callback_data="news_menu")],
         [InlineKeyboardButton("👤 Akun", callback_data="account"), InlineKeyboardButton("💎 Upgrade", callback_data="upgrade")],
+        [InlineKeyboardButton("✅ Konfirmasi Bayar", callback_data="pay_menu")],
     ])
 
 
@@ -801,7 +803,49 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(f"👤 <b>AKUN</b>\n\nID: <code>{uid}</code>\nStatus: <b>{status}</b>\nMarket used: <b>{u.get('market_used',0)}</b>\nNews used: <b>{u.get('news_used',0)}</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
         return
     if data == "upgrade":
-        await q.edit_message_text(upgrade_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
+        await q.edit_message_text(upgrade_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Saya Sudah Bayar", callback_data="pay_menu")], [InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
+        return
+    if data == "pay_menu":
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💎 Elite 60 Hari", callback_data="payplan_60")],
+            [InlineKeyboardButton("👑 VIP 90 Hari", callback_data="payplan_90")],
+            [InlineKeyboardButton("♾️ Lifetime", callback_data="payplan_9999")],
+            [InlineKeyboardButton("🏠 Menu", callback_data="home")],
+        ])
+        await q.edit_message_text(payment_start_text(), reply_markup=kb, parse_mode="HTML")
+        return
+    if data.startswith("payplan_"):
+        days = int(data.replace("payplan_", ""))
+        set_awaiting_payment(uid, days)
+        await q.edit_message_text(payment_waiting_text(days), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
+        return
+    if data.startswith("payapprove_"):
+        if uid != ADMIN_ID:
+            await q.answer("Khusus admin.", show_alert=True)
+            return
+        parts = data.split("_")
+        target_id = parts[1]
+        days = int(parts[2])
+        approve_payment_user(target_id, days)
+        mark_payment_status(target_id, "APPROVED")
+        await q.edit_message_text(f"✅ <b>PAYMENT APPROVED</b>\n\nUser <code>{target_id}</code> sudah aktif premium {format_days(days)}.", parse_mode="HTML")
+        try:
+            await context.bot.send_message(chat_id=int(target_id), text=f"✅ <b>PEMBAYARAN DISETUJUI</b>\n\nAkun lu sudah aktif: <b>{format_days(days)}</b>.\nKlik /start buat akses fitur premium.", parse_mode="HTML")
+        except Exception:
+            pass
+        return
+    if data.startswith("payreject_"):
+        if uid != ADMIN_ID:
+            await q.answer("Khusus admin.", show_alert=True)
+            return
+        target_id = data.replace("payreject_", "")
+        clear_awaiting_payment(target_id)
+        mark_payment_status(target_id, "REJECTED")
+        await q.edit_message_text(f"❌ <b>PAYMENT REJECTED</b>\n\nUser <code>{target_id}</code> ditolak.", parse_mode="HTML")
+        try:
+            await context.bot.send_message(chat_id=int(target_id), text="❌ <b>BUKTI BAYAR DITOLAK</b>\n\nBukti belum valid / belum terbaca. Kirim ulang bukti transfer yang jelas atau chat admin.", parse_mode="HTML")
+        except Exception:
+            pass
         return
 
 
@@ -817,7 +861,7 @@ def upgrade_text():
 <b>Rp 399.000</b>
 
 ♾️ <b>LIFETIME ACCESS</b>
-<b>Rp 499.000</b>
+<b>Rp 1.999.000</b>
 
 ✅ Unlimited Signal
 ✅ Auto Sniper Alert
@@ -833,6 +877,96 @@ def upgrade_text():
 📩 Admin: {ADMIN_CONTACT}
 Kirim bukti transfer setelah bayar.
 """
+
+
+def format_days(days):
+    try:
+        days = int(days)
+    except Exception:
+        days = 60
+    return "LIFETIME" if days >= 9999 else f"{days} hari"
+
+
+def payment_start_text():
+    return f"""
+✅ <b>KONFIRMASI PEMBAYARAN</b>
+
+Pilih paket yang lu bayar.
+
+💳 <b>Payment</b>
+<code>{PAYMENT_TEXT}</code>
+
+Setelah pilih paket, kirim foto/screenshot bukti transfer ke bot ini.
+Bukti akan masuk ke admin untuk approve.
+"""
+
+
+def payment_waiting_text(days):
+    return f"""
+📸 <b>UPLOAD BUKTI TRANSFER</b>
+
+Paket dipilih: <b>{format_days(days)}</b>
+
+Sekarang kirim foto/screenshot bukti transfer ke chat ini.
+Setelah dikirim, admin tinggal klik approve/reject.
+
+⚠️ Pastikan nominal, tanggal, dan status berhasil terlihat jelas.
+"""
+
+
+def set_awaiting_payment(user_id, days):
+    u = get_user(user_id)
+    u["awaiting_payment_proof"] = True
+    u["pending_payment_days"] = int(days)
+    u["pending_payment_at"] = wib_now().strftime("%Y-%m-%d %H:%M:%S")
+    update_user(user_id, u)
+
+
+def clear_awaiting_payment(user_id):
+    u = get_user(int(user_id))
+    u["awaiting_payment_proof"] = False
+    u.pop("pending_payment_days", None)
+    update_user(int(user_id), u)
+
+
+def save_payment_request(user_id, days, file_id, username="", full_name=""):
+    db = load_json(PAYMENT_REQUEST_FILE, [])
+    item = {
+        "user_id": str(user_id),
+        "days": int(days),
+        "file_id": file_id,
+        "username": username or "-",
+        "full_name": full_name or "-",
+        "status": "WAITING_ADMIN",
+        "created_at": wib_now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    db.append(item)
+    db = db[-200:]
+    save_json(PAYMENT_REQUEST_FILE, db)
+    return item
+
+
+def mark_payment_status(user_id, status):
+    db = load_json(PAYMENT_REQUEST_FILE, [])
+    for item in reversed(db):
+        if str(item.get("user_id")) == str(user_id) and item.get("status") == "WAITING_ADMIN":
+            item["status"] = status
+            item["updated_at"] = wib_now().strftime("%Y-%m-%d %H:%M:%S")
+            break
+    save_json(PAYMENT_REQUEST_FILE, db)
+
+
+def approve_payment_user(user_id, days):
+    users = load_json(USER_FILE, {})
+    uid = str(user_id)
+    u = users.get(uid, {"market_used": 0, "news_used": 0, "created_at": wib_now().strftime("%Y-%m-%d %H:%M:%S")})
+    u["premium"] = True
+    u["premium_until"] = "LIFETIME" if int(days) >= 9999 else (wib_now() + timedelta(days=int(days))).strftime("%Y-%m-%d %H:%M:%S")
+    u["awaiting_payment_proof"] = False
+    u.pop("pending_payment_days", None)
+    u["approved_at"] = wib_now().strftime("%Y-%m-%d %H:%M:%S")
+    users[uid] = u
+    save_json(USER_FILE, users)
 
 # ==============================
 # COMMANDS
@@ -1035,6 +1169,10 @@ Admin: <code>/result TRADE_ID WIN</code>
 <code>/news cpi actual=3.2 forecast=3.4</code>
 <code>/fomc hawkish</code>
 
+💳 Payment:
+<code>/bayar 60</code> lalu kirim bukti transfer
+Admin: <code>/payments</code>
+
 📸 AI Vision Lite:
 Kirim screenshot chart ke bot.
 """, parse_mode="HTML")
@@ -1101,6 +1239,45 @@ async def broadcast_command(update, context):
 
 async def vision_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+    u = get_user(uid)
+
+    # Payment proof mode: user already clicked /bayar or payment button.
+    if u.get("awaiting_payment_proof"):
+        days = int(u.get("pending_payment_days", 60))
+        photo = update.message.photo[-1]
+        file_id = photo.file_id
+        username = update.effective_user.username or "-"
+        full_name = update.effective_user.full_name or "-"
+        save_payment_request(uid, days, file_id, username, full_name)
+        clear_awaiting_payment(uid)
+
+        await update.message.reply_text(
+            "✅ <b>BUKTI BAYAR TERKIRIM</b>\n\nTunggu admin approve. Kalau valid, premium aktif otomatis.",
+            parse_mode="HTML"
+        )
+
+        admin_text = f"""
+💳 <b>PAYMENT PROOF REQUEST</b>
+
+User: <b>{full_name}</b>
+Username: @{username}
+ID: <code>{uid}</code>
+Paket: <b>{format_days(days)}</b>
+Waktu: <code>{wib_now().strftime('%d-%m-%Y %H:%M WIB')}</code>
+
+Klik approve kalau pembayaran valid.
+"""
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ APPROVE", callback_data=f"payapprove_{uid}_{days}")],
+            [InlineKeyboardButton("❌ REJECT", callback_data=f"payreject_{uid}")],
+        ])
+        try:
+            await context.bot.send_photo(chat_id=ADMIN_ID, photo=file_id, caption=admin_text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text, reply_markup=kb, parse_mode="HTML")
+        return
+
+    # Default: AI Vision Lite.
     if not can_use_market(uid):
         await update.message.reply_text("🔒 Trial market habis. Upgrade premium untuk AI Vision.")
         return
@@ -1118,6 +1295,36 @@ async def vision_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_usage(uid, "market")
     text = analyze_pair(pair, tf)
     text = "📸 <b>AI VISION LITE</b>\n<code>Screenshot diterima. Bot pakai market engine + caption pair/TF.</code>\n\n" + text
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def bayar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    days = 60
+    if context.args:
+        raw = context.args[0].lower()
+        if raw in ["90", "vip"]:
+            days = 90
+        elif raw in ["life", "lifetime", "9999"]:
+            days = 9999
+        elif raw.isdigit():
+            days = int(raw)
+    set_awaiting_payment(uid, days)
+    await update.message.reply_text(payment_waiting_text(days), parse_mode="HTML")
+
+
+async def payments_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("Lu bukan admin.")
+        return
+    db = load_json(PAYMENT_REQUEST_FILE, [])
+    waiting = [x for x in db if x.get("status") == "WAITING_ADMIN"][-10:]
+    if not waiting:
+        await update.message.reply_text("✅ Tidak ada payment pending.")
+        return
+    text = "💳 <b>PENDING PAYMENT</b>\n\n"
+    for i, item in enumerate(waiting, 1):
+        text += f"{i}. ID <code>{item.get('user_id')}</code> • {format_days(item.get('days',60))} • @{item.get('username','-')} • {item.get('created_at','-')}\n"
     await update.message.reply_text(text, parse_mode="HTML")
 
 # ==============================
@@ -1250,6 +1457,8 @@ def main():
     app.add_handler(CommandHandler("news", news_command))
     app.add_handler(CommandHandler("fomc", fomc_command))
     app.add_handler(CommandHandler("premium", premium_command))
+    app.add_handler(CommandHandler("bayar", bayar_command))
+    app.add_handler(CommandHandler("payments", payments_command))
     app.add_handler(CommandHandler("unpremium", unpremium_command))
     app.add_handler(CommandHandler("stats", stats_admin_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
