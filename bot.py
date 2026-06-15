@@ -855,13 +855,13 @@ def upgrade_text():
 <code>Trading Intelligence System</code>
 
 💎 <b>ELITE ACCESS — 60 HARI</b>
-<s>Rp 499.000</s> 🔥 <b>Rp 299.000</b>
+<s>Rp 499.000</s> 🔥 <b>Rp 199.000</b>
 
 👑 <b>VIP ACCESS — 90 HARI</b>
 <b>Rp 399.000</b>
 
 ♾️ <b>LIFETIME ACCESS</b>
-<b>Rp 1.999.000</b>
+<b>Rp 599.000</b>
 
 ✅ Unlimited Signal
 ✅ Auto Sniper Alert
