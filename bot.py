@@ -1784,34 +1784,58 @@ RR belum ideal.
     if not trigger_ok:
         trigger_name = "Direct POI Entry"
 
+    trend_text = "BULLISH" if direction == "BUY" else "BEARISH"
+    signal_emoji = "🟢" if direction == "BUY" else "🔴"
+    confidence = min(score, 100)
+    conf_blocks = "⬛" * max(1, int(confidence / 10)) + "⬜" * max(0, 10 - int(confidence / 10))
+
+    ai_reason = (
+        "Market menunjukkan struktur bullish yang valid. Harga berada pada area POI dan masih dekat dengan zona entry. "
+        "Momentum mendukung peluang BUY selama harga tidak menembus area invalidasi."
+        if direction == "BUY"
+        else
+        "Market menunjukkan struktur bearish yang valid. Harga berada pada area POI dan masih dekat dengan zona entry. "
+        "Momentum mendukung peluang SELL selama harga tidak menembus area invalidasi."
+    )
+
     result_text = f"""
-🎯 <b>CAPITAL ELITE DIRECT ENTRY</b>
+✦ 💎 <b>CAPITAL ELITE PROJECT</b> 💎 ✦
+━━━━━━━━━━━━━━━━━━━━
 
-💰 <b>{pair['name']}</b> | <b>{tf_key}</b>
-{label}
-📊 Score: <b>{min(score, 100)}/100</b>
-🏆 Grade: <b>{grade}</b>
-⏱️ Update: <b>{wib_now().strftime("%H:%M:%S WIB")}</b>
-📡 Price Source: <b>{live_source}</b>
+🗓️ <b>{wib_now().strftime("%d %B %Y pukul %H.%M WIB")}</b>
+💱 Pair : <b>{pair['name']}</b>
+⏱ Timeframe : <b>{tf_key}</b>
 
-📍 Entry: <code>{fmt(entry_low)} - {fmt(entry_high)}</code>
-📌 Recent: <code>{fmt(price)}</code>
-🧩 Mode: <b>Direct POI Entry</b>
-🧩 POI: <b>{zone_name}</b>
+━━━━━━━━━━━━━━━━━━━━
+🤖 <b>SINYAL TRADING AI</b>
+━━━━━━━━━━━━━━━━━━━━
 
-🛑 SL: <code>{fmt(sl)}</code>
-📏 Risk: <b>{rpips:.0f} pips</b>
-⚖️ RR: <b>1:{rr:.2f}</b>
-{risk_note}
-🎯 TP1: <code>{fmt(tp1)}</code>
-🎯 TP2: <code>{fmt(tp2)}</code>
-🎯 TP3: <code>{fmt(tp3)}</code>
+📈 Trend : <b>{trend_text}</b>
+🎯 Confidence : <b>{confidence}%</b> {conf_blocks}
 
-✅ Confluence:
-{reason_text}
+{signal_emoji} Sinyal : <b>{direction}</b>
+💰 Entry : <code>{fmt(entry_mid)}</code>
+⛔ Stop Loss : <code>{fmt(sl)}</code>
+🎯 Take Profit : <code>{fmt(tp2)}</code>
 
-⚠️ Entry hanya di area. Jangan chase kalau harga sudah jauh dari zone.
-{disclaimer_footer()}
+━━━━━━━━━━━━━━━━━━━━
+🤖 <b>ANALISA AI</b>
+━━━━━━━━━━━━━━━━━━━━
+
+{ai_reason}
+
+Validasi:
+✅ {reason_text}
+⚖️ RR : <b>1:{rr:.2f}</b>
+📌 POI : <b>{zone_name}</b>
+
+━━━━━━━━━━━━━━━━━━━━
+⚠️ <b>DISCLAIMER</b> ⚠️
+
+Bukan saran finansial.
+Trading memiliki risiko tinggi.
+Gunakan stop loss dan money management.
+━━━━━━━━━━━━━━━━━━━━
 """
     cache_set(cache_key, result_text)
     return result_text
