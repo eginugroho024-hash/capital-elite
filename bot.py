@@ -298,16 +298,33 @@ def session_info():
     if 5 <= h < 14:
         return "Asia Session", 4, "Market sering lebih kalem. Fokus sniper/retest, jangan kejar candle."
     if 14 <= h < 20:
-        return "London Session", 10, "Volume mulai masuk. Validasi MSS + POI lebih penting."
+        return "London Session", 10, "Volume mulai masuk. Validasi sweep + MSS/BOS lebih penting."
     return "New York Session", 10, "Volatilitas tinggi. Wajib kecilkan lot dan tunggu close candle."
 
 
 def sl_tp_distance(pair_key, market_range):
-    min_sl, max_sl = PAIRS[pair_key]["sl"]
-    min_tp, max_tp = PAIRS[pair_key]["tp"]
-    sl = max(min_sl, min(market_range * 0.85, max_sl))
-    tp = max(min_tp, min(sl * 2.2, max_tp))
-    return sl, tp
+    """
+    FIXED RISK MODEL
+    Max SL 30 pips / point model.
+    TP dibuat minimal 60 pips agar RR minimal 1:2.
+    """
+
+    if pair_key == "XAUUSD":
+        return 30, 75
+
+    if pair_key == "XAGUSD":
+        return 30, 75
+
+    if pair_key in ["BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD"]:
+        return 30, 90
+
+    if pair_key in ["NAS100", "US30", "SPX500"]:
+        return 30, 80
+
+    if pair_key in ["USOIL", "UKOIL"]:
+        return 30, 70
+
+    return 30, 60
 
 
 def market_status(price, h1, m15, m5):
@@ -326,14 +343,164 @@ def liquidity_heatmap(h1, m15, m5):
     return buy_levels[:3], sell_levels[:3]
 
 
+def dxy_filter():
+    """
+    DXY correlation filter:
+    DXY bullish = pressure bearish untuk XAU/crypto/risk assets.
+    DXY bearish = support bullish untuk XAU/crypto/risk assets.
+    Kalau data gagal, netral agar bot tetap jalan.
+    """
+    try:
+        if yf is None:
+            return {"bias": "NEUTRAL", "score_buy": 0, "score_sell": 0, "note": "DXY data unavailable"}
+        data = yf.download("DX-Y.NYB", period="7d", interval="60m", progress=False, auto_adjust=False)
+        if data is None or data.empty or len(data) < 20:
+            data = yf.download("DX=F", period="7d", interval="60m", progress=False, auto_adjust=False)
+        if data is None or data.empty or len(data) < 20:
+            return {"bias": "NEUTRAL", "score_buy": 0, "score_sell": 0, "note": "DXY data unavailable"}
+
+        closes = data["Close"].astype(float)
+        last = float(closes.iloc[-1])
+        ma20 = float(closes.rolling(20).mean().iloc[-1])
+        first = float(closes.iloc[-12]) if len(closes) >= 12 else float(closes.iloc[0])
+
+        if last > ma20 and last > first:
+            return {"bias": "BULLISH", "score_buy": -8, "score_sell": 10, "note": "DXY bullish → pressure bearish ke XAU"}
+        if last < ma20 and last < first:
+            return {"bias": "BEARISH", "score_buy": 10, "score_sell": -8, "note": "DXY bearish → support bullish ke XAU"}
+        return {"bias": "NEUTRAL", "score_buy": 0, "score_sell": 0, "note": "DXY netral"}
+    except Exception:
+        return {"bias": "NEUTRAL", "score_buy": 0, "score_sell": 0, "note": "DXY filter unavailable"}
+
+
+def near_high_impact_news():
+    """
+    News filter ringan. Tidak mematikan sinyal, hanya mengurangi confidence.
+    Supaya fitur lama tetap jalan dan tidak NO TRADE terus.
+    """
+    try:
+        events = parse_forex_factory_today()
+        if not events:
+            return False, "No high impact USD news detected"
+        return True, "High impact USD news detected — kecilkan lot / tunggu spread normal"
+    except Exception:
+        return False, "News filter unavailable"
+
+
+def detect_liquidity_sweep(signal, h1, m15, m5):
+    if signal == "BUY":
+        swept = m5["low"] <= m15["low"] or m15["low"] <= h1["low"] or m5["low"] <= m15["eq"]
+        return swept, "Sell-side liquidity sweep / discount raid" if swept else "Sweep belum bersih"
+    swept = m5["high"] >= m15["high"] or m15["high"] >= h1["high"] or m5["high"] >= m15["eq"]
+    return swept, "Buy-side liquidity sweep / premium raid" if swept else "Sweep belum bersih"
+
+
+def detect_mss_bos(signal, h1, m15, m5):
+    if signal == "BUY":
+        mss = (m5["candle"] == "BULLISH" and m5["price"] > m5["eq"]) or (m5["price"] > m5["ema20"])
+        bos = m15["price"] > m15["eq"] or h1["bias"] == "BULLISH"
+        return mss, bos, "Bullish MSS/BOS" if mss and bos else "MSS/BOS belum full"
+    mss = (m5["candle"] == "BEARISH" and m5["price"] < m5["eq"]) or (m5["price"] < m5["ema20"])
+    bos = m15["price"] < m15["eq"] or h1["bias"] == "BEARISH"
+    return mss, bos, "Bearish MSS/BOS" if mss and bos else "MSS/BOS belum full"
+
+
+def detect_fvg_ob_crt(signal, h1, m15, m5):
+    """
+    Karena data yang tersedia hanya OHLC snapshot per TF, ini pakai proxy:
+    FVG = range candle cukup besar dan displacement.
+    OB = harga dekat EQ / open candle opposite area.
+    CRT = sweep high/low candle range lalu balik ke range.
+    """
+    avg_range_proxy = max((h1["range"] + m15["range"] + m5["range"]) / 3, 0.00001)
+
+    if signal == "BUY":
+        displacement = m5["candle"] == "BULLISH" and m5["range"] >= avg_range_proxy * 0.45
+        fvg = displacement and m5["price"] > m5["eq"]
+        ob = m5["low"] <= m15["eq"] or m15["low"] <= h1["eq"]
+        crt = m5["low"] < m15["low"] or (m5["low"] < m5["eq"] and m5["price"] > m5["eq"])
+        poi_name = "Discount FVG/OB/CRT"
+    else:
+        displacement = m5["candle"] == "BEARISH" and m5["range"] >= avg_range_proxy * 0.45
+        fvg = displacement and m5["price"] < m5["eq"]
+        ob = m5["high"] >= m15["eq"] or m15["high"] >= h1["eq"]
+        crt = m5["high"] > m15["high"] or (m5["high"] > m5["eq"] and m5["price"] < m5["eq"])
+        poi_name = "Premium FVG/OB/CRT"
+
+    return {
+        "fvg": fvg,
+        "ob": ob,
+        "crt": crt,
+        "displacement": displacement,
+        "poi_name": poi_name,
+    }
+
+
+def premium_discount_score(signal, price, h1, m15):
+    h1_discount = price <= h1["eq"]
+    m15_discount = price <= m15["eq"]
+    h1_premium = price >= h1["eq"]
+    m15_premium = price >= m15["eq"]
+
+    if signal == "BUY":
+        ok = h1_discount or m15_discount
+        return ok, "Discount zone" if ok else "BUY belum ideal di discount"
+    ok = h1_premium or m15_premium
+    return ok, "Premium zone" if ok else "SELL belum ideal di premium"
+
+
 def calc_smc_score(signal, price, h1, m15, m5, session_score):
+    dxy = dxy_filter()
+    news_risk, news_note = near_high_impact_news()
+    sweep_ok, sweep_note = detect_liquidity_sweep(signal, h1, m15, m5)
+    mss_ok, bos_ok, mss_note = detect_mss_bos(signal, h1, m15, m5)
+    poi = detect_fvg_ob_crt(signal, h1, m15, m5)
+    pd_ok, pd_note = premium_discount_score(signal, price, h1, m15)
+
     htf = 20 if (signal == "BUY" and h1["bias"] == "BULLISH") or (signal == "SELL" and h1["bias"] == "BEARISH") else 10
-    poi = 20 if (signal == "BUY" and price <= m15["eq"]) or (signal == "SELL" and price >= m15["eq"]) else 9
-    liq = 20 if (signal == "BUY" and (m5["low"] <= m15["low"] or price <= m5["eq"])) or (signal == "SELL" and (m5["high"] >= m15["high"] or price >= m5["eq"])) else 10
-    mss = 20 if (signal == "BUY" and (m5["candle"] == "BULLISH" or price > m5["ema20"])) or (signal == "SELL" and (m5["candle"] == "BEARISH" or price < m5["ema20"])) else 8
-    timing = min(20, session_score * 2)
-    total = htf + poi + liq + mss + timing
-    return {"HTF": htf, "POI": poi, "Liquidity": liq, "MSS": mss, "Timing": timing, "Total": total}
+    dxy_score = 10 if (signal == "BUY" and dxy["bias"] == "BEARISH") or (signal == "SELL" and dxy["bias"] == "BULLISH") else 5 if dxy["bias"] == "NEUTRAL" else 0
+    liq = 20 if sweep_ok else 8
+    mss = 15 if mss_ok else 6
+    bos = 10 if bos_ok else 4
+    fvg = 10 if poi["fvg"] else 4
+    ob = 10 if poi["ob"] else 4
+    crt = 10 if poi["crt"] else 3
+    pd = 10 if pd_ok else 4
+    timing = min(10, session_score)
+
+    penalty = 8 if news_risk else 0
+    total_raw = htf + dxy_score + liq + mss + bos + fvg + ob + crt + pd + timing - penalty
+    total = max(35, min(100, total_raw))
+
+    return {
+        "HTF": htf,
+        "DXY": dxy_score,
+        "Liquidity": liq,
+        "MSS": mss,
+        "BOS": bos,
+        "FVG": fvg,
+        "OB": ob,
+        "CRT": crt,
+        "PD": pd,
+        "Timing": timing,
+        "Penalty": penalty,
+        "Total": total,
+        "dxy_bias": dxy["bias"],
+        "dxy_note": dxy["note"],
+        "news_risk": news_risk,
+        "news_note": news_note,
+        "sweep_ok": sweep_ok,
+        "sweep_note": sweep_note,
+        "mss_ok": mss_ok,
+        "bos_ok": bos_ok,
+        "mss_note": mss_note,
+        "fvg_ok": poi["fvg"],
+        "ob_ok": poi["ob"],
+        "crt_ok": poi["crt"],
+        "poi_name": poi["poi_name"],
+        "pd_ok": pd_ok,
+        "pd_note": pd_note,
+    }
 
 
 def analyze_pair(pair_key, tf_key="M5", compact=False):
@@ -368,64 +535,130 @@ Coba ulang 30-60 detik lagi.
 
     price = tf["price"]
     session_tag, session_score, session_note = session_info()
+    dxy = dxy_filter()
 
+    # Direction engine:
+    # HTF Bias + DXY Filter + Premium/Discount + Liquidity context.
     buy_score = 0
     sell_score = 0
-    if h1["bias"] == "BULLISH": buy_score += 28
-    if h1["bias"] == "BEARISH": sell_score += 28
-    if m15["bias"] in ["BULLISH", "SIDEWAYS"]: buy_score += 16
-    if m15["bias"] in ["BEARISH", "SIDEWAYS"]: sell_score += 16
-    if price <= m15["eq"]: buy_score += 15
-    if price >= m15["eq"]: sell_score += 15
-    if m5["low"] <= m15["low"] or price <= m5["eq"]: buy_score += 12
-    if m5["high"] >= m15["high"] or price >= m5["eq"]: sell_score += 12
-    if m5["candle"] == "BULLISH" or price > m5["ema20"]: buy_score += 12
-    if m5["candle"] == "BEARISH" or price < m5["ema20"]: sell_score += 12
+
+    if h1["bias"] == "BULLISH":
+        buy_score += 26
+    elif h1["bias"] == "BEARISH":
+        sell_score += 26
+
+    if m15["bias"] == "BULLISH":
+        buy_score += 16
+    elif m15["bias"] == "BEARISH":
+        sell_score += 16
+    else:
+        buy_score += 6
+        sell_score += 6
+
+    if m5["bias"] == "BULLISH" or m5["candle"] == "BULLISH":
+        buy_score += 12
+    if m5["bias"] == "BEARISH" or m5["candle"] == "BEARISH":
+        sell_score += 12
+
+    # Premium / discount
+    if price <= h1["eq"] or price <= m15["eq"]:
+        buy_score += 14
+    if price >= h1["eq"] or price >= m15["eq"]:
+        sell_score += 14
+
+    # Liquidity sweep context
+    buy_sweep, _ = detect_liquidity_sweep("BUY", h1, m15, m5)
+    sell_sweep, _ = detect_liquidity_sweep("SELL", h1, m15, m5)
+    if buy_sweep:
+        buy_score += 12
+    if sell_sweep:
+        sell_score += 12
+
+    # DXY filter strongest for XAU, XAG, forex/indices/crypto kept as soft filter.
+    dxy_weight = 14 if pair_key in ["XAUUSD", "XAGUSD"] else 8
+    if dxy["bias"] == "BEARISH":
+        buy_score += dxy_weight
+    elif dxy["bias"] == "BULLISH":
+        sell_score += dxy_weight
+
     buy_score += session_score
     sell_score += session_score
 
     signal = "BUY" if buy_score >= sell_score else "SELL"
     score_gap = abs(buy_score - sell_score)
-    confidence = min(max(buy_score if signal == "BUY" else sell_score, 45), 96)
-    no_trade = confidence < 62 or score_gap < 8
 
     smc = calc_smc_score(signal, price, h1, m15, m5, session_score)
     buy_liq, sell_liq = liquidity_heatmap(h1, m15, m5)
     status = market_status(price, h1, m15, m5)
     sl_dist, tp_dist = sl_tp_distance(pair_key, tf["range"])
 
+    # Confidence is now derived from full ICT/SMC/DXY confluence
+    base_conf = max(buy_score, sell_score)
+    confidence = int(min(max((base_conf * 0.45) + (smc["Total"] * 0.55), 45), 96))
+    no_trade = confidence < 55
+
     if signal == "BUY":
-        entry_low = price - sl_dist * 0.15
-        entry_high = price + sl_dist * 0.08
-        zf_low = min(price, m15["eq"]) - sl_dist * 0.35
-        zf_high = min(price, m15["eq"]) - sl_dist * 0.10
+        # Entry uses discount POI, sweep low, OB/FVG proxy and realtime area.
+        poi_anchor = min(price, m15["eq"], h1["eq"])
+        entry_low = poi_anchor - sl_dist * 0.25
+        entry_high = price + sl_dist * 0.05
+        zf_low = min(price, m15["eq"]) - sl_dist * 0.40
+        zf_high = min(price, m15["eq"]) - sl_dist * 0.12
         sl = min(m5["low"], m15["low"], zf_low - sl_dist * 0.45)
         tp1 = price + tp_dist * 0.60
         tp2 = price + tp_dist
         tp3 = price + tp_dist * 1.45
         action = "🟢 BUY PLAN"
-        invalid = "Invalid kalau low POI jebol dan candle close bearish kuat."
-        confluence = ["Discount POI", "Sell-side liquidity sweep", "Bullish MSS / recovery", session_note]
+        invalid = "Invalid kalau SSL/discount POI jebol dan candle close bearish kuat."
+        confluence = [
+            smc["pd_note"],
+            smc["sweep_note"],
+            smc["mss_note"],
+            smc["dxy_note"],
+            session_note
+        ]
     else:
-        entry_low = price - sl_dist * 0.08
-        entry_high = price + sl_dist * 0.15
-        zf_low = max(price, m15["eq"]) + sl_dist * 0.10
-        zf_high = max(price, m15["eq"]) + sl_dist * 0.35
+        # Entry uses premium POI, sweep high, OB/FVG proxy and realtime area.
+        poi_anchor = max(price, m15["eq"], h1["eq"])
+        entry_low = price - sl_dist * 0.05
+        entry_high = poi_anchor + sl_dist * 0.25
+        zf_low = max(price, m15["eq"]) + sl_dist * 0.12
+        zf_high = max(price, m15["eq"]) + sl_dist * 0.40
         sl = max(m5["high"], m15["high"], zf_high + sl_dist * 0.45)
         tp1 = price - tp_dist * 0.60
         tp2 = price - tp_dist
         tp3 = price - tp_dist * 1.45
         action = "🔴 SELL PLAN"
-        invalid = "Invalid kalau high POI jebol dan candle close bullish kuat."
-        confluence = ["Premium POI", "Buy-side liquidity sweep", "Bearish MSS / rejection", session_note]
+        invalid = "Invalid kalau BSL/premium POI jebol dan candle close bullish kuat."
+        confluence = [
+            smc["pd_note"],
+            smc["sweep_note"],
+            smc["mss_note"],
+            smc["dxy_note"],
+            session_note
+        ]
 
-    grade = "A+" if confidence >= 88 and smc["Total"] >= 80 else "A" if confidence >= 78 else "B" if confidence >= 66 else "C"
+    grade = "A+" if confidence >= 88 and smc["Total"] >= 82 else "A" if confidence >= 78 else "B" if confidence >= 66 else "C"
     setup_name = "💎 INSTITUTIONAL SETUP" if grade == "A+" else "🚀 SNIPER SETUP" if grade == "A" else "🟡 RETEST SETUP" if grade == "B" else "⚪ WAIT"
     entry_mid = (entry_low + entry_high) / 2
     rr = round(abs(tp2 - entry_mid) / max(abs(entry_mid - sl), 0.00001), 1)
 
     if compact:
-        return {"pair": pair_key, "name": PAIRS[pair_key]["name"], "signal": "NO SETUP" if no_trade else signal, "confidence": confidence, "grade": grade, "price": price, "entry": (entry_low, entry_high), "sl": sl, "tp1": tp1, "tp2": tp2, "smc": smc, "status": status, "bias": (h1["bias"], m15["bias"], m5["bias"])}
+        return {
+            "pair": pair_key,
+            "name": PAIRS[pair_key]["name"],
+            "signal": "NO SETUP" if no_trade else signal,
+            "confidence": confidence,
+            "grade": grade,
+            "price": price,
+            "entry": (entry_low, entry_high),
+            "sl": sl,
+            "tp1": tp1,
+            "tp2": tp2,
+            "smc": smc,
+            "status": status,
+            "bias": (h1["bias"], m15["bias"], m5["bias"])
+        }
 
     if no_trade:
         text = f"""
@@ -440,6 +673,7 @@ Coba ulang 30-60 detik lagi.
 H1: <b>{h1['bias']}</b>
 M15: <b>{m15['bias']}</b>
 M5: <b>{m5['bias']}</b>
+DXY: <b>{smc['dxy_bias']}</b>
 
 🔥 <b>Confidence</b>: <b>{confidence}%</b>
 {conf_bar(confidence)}
@@ -450,8 +684,16 @@ M5: <b>{m5['bias']}</b>
 BSL: <code>{fmt(buy_liq[0])}</code> / <code>{fmt(buy_liq[1])}</code>
 SSL: <code>{fmt(sell_liq[0])}</code> / <code>{fmt(sell_liq[1])}</code>
 
+🧠 <b>Filter Check</b>
+DXY: <b>{smc['DXY']}/10</b> — {smc['dxy_note']}
+Sweep: <b>{smc['Liquidity']}/20</b> — {smc['sweep_note']}
+MSS/BOS: <b>{smc['MSS'] + smc['BOS']}/25</b> — {smc['mss_note']}
+FVG/OB/CRT: <b>{smc['FVG'] + smc['OB'] + smc['CRT']}/30</b>
+Premium/Discount: <b>{smc['PD']}/10</b> — {smc['pd_note']}
+News: {smc['news_note']}
+
 🛡️ <b>Elite Note</b>
-Edge belum bersih. Tunggu sweep + close candle valid.
+Edge belum bersih. Tunggu sweep + MSS/BOS + POI valid.
 
 ⚠️ <b>DISCLAIMER</b>
 Bukan saran finansial. Trading berisiko tinggi.
@@ -460,9 +702,10 @@ Bukan saran finansial. Trading berisiko tinggi.
         return text
 
     trade_id = log_signal(pair_key, tf_key, signal, entry_low, entry_high, sl, tp1, tp2, confidence, grade)
+
     text = f"""
 👑 <b>CAPITAL ELITE INTELLIGENCE</b>
-<code>V9 Premium • SMC/ICT Engine</code>
+<code>V9 Premium • SMC/ICT + DXY Engine</code>
 
 💱 <b>{PAIRS[pair_key]['name']}</b> | <b>{tf_key}</b> • {session_tag}
 {status}
@@ -473,6 +716,7 @@ Bukan saran finansial. Trading berisiko tinggi.
 H1: <b>{h1['bias']}</b>
 M15: <b>{m15['bias']}</b>
 M5: <b>{m5['bias']}</b>
+DXY: <b>{smc['dxy_bias']}</b>
 Price: <code>{fmt(price)}</code>
 
 ⚡ <b>Entry Area</b>
@@ -494,11 +738,17 @@ BSL: <code>{fmt(buy_liq[0])}</code> / <code>{fmt(buy_liq[1])}</code>
 SSL: <code>{fmt(sell_liq[0])}</code> / <code>{fmt(sell_liq[1])}</code>
 
 🧠 <b>Smart Money Score</b>
-Liquidity: <b>{smc['Liquidity']}/20</b>
-MSS: <b>{smc['MSS']}/20</b>
-POI: <b>{smc['POI']}/20</b>
 HTF: <b>{smc['HTF']}/20</b>
-Timing: <b>{smc['Timing']}/20</b>
+DXY Filter: <b>{smc['DXY']}/10</b>
+Liquidity Sweep: <b>{smc['Liquidity']}/20</b>
+MSS: <b>{smc['MSS']}/15</b>
+BOS: <b>{smc['BOS']}/10</b>
+FVG: <b>{smc['FVG']}/10</b>
+OB: <b>{smc['OB']}/10</b>
+CRT: <b>{smc['CRT']}/10</b>
+Premium/Discount: <b>{smc['PD']}/10</b>
+Timing: <b>{smc['Timing']}/10</b>
+News Penalty: <b>-{smc['Penalty']}</b>
 TOTAL: <b>{smc['Total']}/100</b>
 
 📊 <b>Elite Grade</b>
@@ -513,9 +763,10 @@ Trade ID: <code>{trade_id}</code>
 • {confluence[1]}
 • {confluence[2]}
 • {confluence[3]}
+• {confluence[4]}
 
 🛡️ <b>Management</b>
-Entry kecil dulu. TP1 kena → geser SL ke BE.
+Entry kecil dulu. Max SL 30 pips. TP1 kena → geser SL ke BE.
 {invalid}
 
 ⚠️ <b>DISCLAIMER</b>
