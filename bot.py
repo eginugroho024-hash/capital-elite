@@ -19,6 +19,9 @@ if not TOKEN:
 
 WIB = timezone(timedelta(hours=7))
 USER_STATE_FILE = "users.json"
+TRIAL_LIMIT = 3
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "username_admin")
+PREMIUM_PRICE_TEXT = os.environ.get("PREMIUM_PRICE_TEXT", "Rp299.000")
 STOCK_USER_WATCHLIST_FILE = "stock_watchlists.json"
 STOCK_ALERT_FILE = "stock_alerts.json"
 
@@ -97,14 +100,89 @@ def get_user(user_id):
     db = load_json(USER_STATE_FILE, {})
     uid = str(user_id)
     if uid not in db:
-        db[uid] = {"pair": "XAUUSD", "tf": "M5"}
+        db[uid] = {"pair": "XAUUSD", "tf": "M5", "premium": False, "trial_used": 0}
         save_json(USER_STATE_FILE, db)
+    db[uid].setdefault("pair", "XAUUSD")
+    db[uid].setdefault("tf", "M5")
+    db[uid].setdefault("premium", False)
+    db[uid].setdefault("trial_used", 0)
+    save_json(USER_STATE_FILE, db)
     return db[uid]
 
 def save_user(user_id, user):
     db = load_json(USER_STATE_FILE, {})
     db[str(user_id)] = user
     save_json(USER_STATE_FILE, db)
+
+def is_premium(user):
+    return bool(user.get("premium", False))
+
+
+def can_use_analysis(user):
+    return is_premium(user) or int(user.get("trial_used", 0)) < TRIAL_LIMIT
+
+
+def add_trial_usage(user_id):
+    user = get_user(user_id)
+    if not is_premium(user):
+        user["trial_used"] = int(user.get("trial_used", 0)) + 1
+        save_user(user_id, user)
+    return user
+
+
+def premium_locked_text(user):
+    used = int(user.get("trial_used", 0))
+    return f"""
+🔒 <b>AKSES PREMIUM TERKUNCI</b>
+
+Trial gratis sudah habis.
+Pemakaian trial: <b>{used}/{TRIAL_LIMIT}</b>
+
+💎 <b>CAPITAL ELITE PREMIUM</b>
+✅ Unlimited Forex/Crypto Analysis
+✅ Analisa Saham IDX & US
+✅ Top 10 Saham Potensi Terbang
+✅ Heatmap Market
+✅ Watchlist Saham
+✅ AI Vision Screenshot
+✅ Entry • SL • TP
+
+Harga:
+<s>Rp500.000</s>
+🔥 <b>{PREMIUM_PRICE_TEXT}</b>
+
+Hubungi Admin:
+@{ADMIN_USERNAME}
+"""
+
+
+def premium_menu_text(user):
+    status = "AKTIF ✅" if is_premium(user) else "BELUM AKTIF 🔒"
+    used = int(user.get("trial_used", 0))
+    sisa = max(TRIAL_LIMIT - used, 0)
+    return f"""
+💎 <b>CAPITAL ELITE PREMIUM</b>
+
+Status: <b>{status}</b>
+Trial tersisa: <b>{sisa}/{TRIAL_LIMIT}</b>
+
+Fitur Premium:
+✅ Unlimited Market Analysis
+✅ Forex & Crypto Entry
+✅ Saham IDX / US
+✅ Top 10 Saham Potensi Terbang
+✅ Heatmap IDX & US
+✅ Watchlist Alert
+✅ AI Vision Screenshot
+✅ Entry • SL • TP otomatis
+
+Harga:
+<s>Rp500.000</s>
+🔥 <b>{PREMIUM_PRICE_TEXT}</b>
+
+Untuk upgrade:
+Chat Admin @{ADMIN_USERNAME}
+"""
 
 def disclaimer():
     return """
@@ -422,15 +500,19 @@ Validasi:
 def main_menu(user_id):
     user = get_user(user_id)
     pair, tf = user.get("pair", "XAUUSD"), user.get("tf", "M5")
+    premium_status = "💎 PREMIUM ACTIVE" if is_premium(user) else f"🆓 FREE TRIAL {max(TRIAL_LIMIT - int(user.get('trial_used', 0)), 0)}/{TRIAL_LIMIT}"
+
     text = f"""
 👑 <b>CAPITAL ELITE PROJECT</b>
 <code>AI-Powered Trading Intelligence</code>
+
+{premium_status}
 
 💱 Pair aktif: <b>{PAIRS[pair]['name']}</b>
 ⏱ TF aktif: <b>{tf}</b>
 
 📊 <b>Market Analysis</b>
-Selalu kasih Entry • SL • TP
+Entry • SL • TP otomatis
 
 📈 <b>Stock Analysis</b>
 IDX & US Stocks • Scanner breakout
@@ -445,6 +527,7 @@ Kirim screenshot chart + caption pair/TF
         [InlineKeyboardButton("🔥 Heatmap", callback_data="stock_heatmap"), InlineKeyboardButton("⭐ Watchlist", callback_data="stock_watchlist")],
         [InlineKeyboardButton("💱 Ganti Pair", callback_data="pairs"), InlineKeyboardButton("⏱ Ganti TF", callback_data="tfs")],
         [InlineKeyboardButton("🧠 Cara AI Vision", callback_data="vision_help")],
+        [InlineKeyboardButton("💎 Premium", callback_data="premium")],
     ]
     return text, InlineKeyboardMarkup(kb)
 
@@ -490,9 +573,19 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text, kb = main_menu(user_id)
         await q.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
     elif data == "analyze":
+        if not can_use_analysis(user):
+            await q.edit_message_text(
+                premium_locked_text(user),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Premium", callback_data="premium")], [InlineKeyboardButton("⬅️ Home", callback_data="home")]]),
+                parse_mode="HTML"
+            )
+            return
         pair, tf = user.get("pair", "XAUUSD"), user.get("tf", "M5")
         await q.edit_message_text("📡 Ambil data realtime...")
         result = build_analysis(pair, tf)
+        user = add_trial_usage(user_id)
+        if not is_premium(user):
+            result += f"\n\n🆓 Trial tersisa: <b>{max(TRIAL_LIMIT - int(user.get('trial_used', 0)), 0)}/{TRIAL_LIMIT}</b>"
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Refresh", callback_data="analyze")],
             [InlineKeyboardButton("💱 Pair", callback_data="pairs"), InlineKeyboardButton("⏱ TF", callback_data="tfs")],
@@ -514,10 +607,20 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
 
-    elif data.startswith("stock_"):
+    elif data.startswith("stock_") and data not in ["stock_top", "stock_heatmap", "stock_watchlist"]:
+        if not can_use_analysis(user):
+            await q.edit_message_text(
+                premium_locked_text(user),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Premium", callback_data="premium")], [InlineKeyboardButton("⬅️ Home", callback_data="home")]]),
+                parse_mode="HTML"
+            )
+            return
         symbol = data.replace("stock_", "")
         await q.edit_message_text("📡 Analisa saham...\nTunggu sebentar.")
         result = analyze_stock(symbol)
+        user = add_trial_usage(user_id)
+        if not is_premium(user):
+            result += f"\n\n🆓 Trial tersisa: <b>{max(TRIAL_LIMIT - int(user.get('trial_used', 0)), 0)}/{TRIAL_LIMIT}</b>"
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Scan Lagi", callback_data=f"stock_{symbol}")],
             [InlineKeyboardButton("🚀 Scanner", callback_data="stock_scan")],
@@ -564,6 +667,13 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         await q.edit_message_text(result, reply_markup=kb, parse_mode="HTML")
 
+    elif data == "premium":
+        await q.edit_message_text(
+            premium_menu_text(user),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Home", callback_data="home")]]),
+            parse_mode="HTML"
+        )
+
     elif data == "vision_help":
         await q.edit_message_text("🧠 Kirim screenshot chart sebagai foto + caption contoh: BTCUSD M5", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Home", callback_data="home")]]))
 
@@ -592,9 +702,17 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(result + "\n\n⚠️ Not Financial Advice.", parse_mode="HTML")
 
 async def analyze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = get_user(update.effective_user.id)
+    user_id = update.effective_user.id
+    user = get_user(user_id)
+    if not can_use_analysis(user):
+        await update.message.reply_text(premium_locked_text(user), parse_mode="HTML")
+        return
     await update.message.reply_text("📡 Ambil data realtime...")
-    await update.message.reply_text(build_analysis(user.get("pair", "XAUUSD"), user.get("tf", "M5")), parse_mode="HTML")
+    result = build_analysis(user.get("pair", "XAUUSD"), user.get("tf", "M5"))
+    user = add_trial_usage(user_id)
+    if not is_premium(user):
+        result += f"\n\n🆓 Trial tersisa: <b>{max(TRIAL_LIMIT - int(user.get('trial_used', 0)), 0)}/{TRIAL_LIMIT}</b>"
+    await update.message.reply_text(result, parse_mode="HTML")
 
 async def pair_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -930,13 +1048,21 @@ untuk detail Entry / SL / TP.
         print("STOCK WATCH ALERT ERROR:", e)
 
 async def stock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user = get_user(user_id)
     if not context.args:
         await update.message.reply_text("Contoh:\n<code>/stock BBCA.JK</code>\n<code>/stock TSLA</code>", parse_mode="HTML")
         return
+    if not can_use_analysis(user):
+        await update.message.reply_text(premium_locked_text(user), parse_mode="HTML")
+        return
     symbol = context.args[0].upper()
     await update.message.reply_text("📡 Analisa saham...\nTunggu sebentar.")
-    await update.message.reply_text(analyze_stock(symbol), parse_mode="HTML")
-
+    result = analyze_stock(symbol)
+    user = add_trial_usage(user_id)
+    if not is_premium(user):
+        result += f"\n\n🆓 Trial tersisa: <b>{max(TRIAL_LIMIT - int(user.get('trial_used', 0)), 0)}/{TRIAL_LIMIT}</b>"
+    await update.message.reply_text(result, parse_mode="HTML")
 
 async def stocks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🚀 Scanning saham potensial...\nTunggu sebentar.")
@@ -994,6 +1120,10 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("analyze", analyze_cmd))
 app.add_handler(CommandHandler("pair", pair_cmd))
 app.add_handler(CommandHandler("tf", tf_cmd))
+app.add_handler(CommandHandler("premium", premium_cmd))
+app.add_handler(CommandHandler("approve", approve_cmd))
+app.add_handler(CommandHandler("revoke", revoke_cmd))
+app.add_handler(CommandHandler("myid", myid_cmd))
 app.add_handler(CommandHandler("stock", stock_cmd))
 app.add_handler(CommandHandler("stocks", stocks_cmd))
 app.add_handler(CommandHandler("stocktop", stocktop_cmd))
