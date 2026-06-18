@@ -1,1480 +1,710 @@
-# CAPITAL ELITE PROJECT V9 PREMIUM
-# Replace file lama lu dengan file ini.
-# Requirements:
-# python-telegram-bot==20.6
-# tradingview-ta
-# yfinance
-# requests
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
-from tradingview_ta import TA_Handler
-from datetime import datetime, timedelta, time as dt_time
 import os
-import re
 import json
-import math
-import random
-import time as pytime
+import base64
+from datetime import datetime, timedelta, timezone
+
 import requests
+import yfinance as yf
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
-try:
-    import yfinance as yf
-except Exception:
-    yf = None
-
-# ==============================
-# CONFIG
-# ==============================
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "7889334774"))
-PAYMENT_TEXT = os.environ.get("PAYMENT_TEXT", "DANA / QRIS: 085778001402")
-ADMIN_CONTACT = os.environ.get("ADMIN_CONTACT", "@egingroho")
+TD_API_KEY = os.environ.get("TD_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 
-USER_FILE = "users.json"
-SIGNAL_LOG_FILE = "signal_log.json"
-TRADE_HISTORY_FILE = "trade_history.json"
-NEWS_SENT_FILE = "news_sent.json"
-ALERT_SENT_FILE = "alert_sent.json"
-PAYMENT_REQUEST_FILE = "payment_requests.json"
+if not TOKEN:
+    raise RuntimeError("TELEGRAM_BOT_TOKEN belum diisi di Railway Variables.")
 
-MARKET_CACHE = {}
-MARKET_CACHE_SECONDS = 180
-TRIAL_LIMIT_MARKET = 5
-TRIAL_LIMIT_NEWS = 3
-AUTO_ALERT_MIN_CONF = 85
+WIB = timezone(timedelta(hours=7))
+USER_STATE_FILE = "users.json"
+STOCK_USER_WATCHLIST_FILE = "stock_watchlists.json"
+STOCK_ALERT_FILE = "stock_alerts.json"
 
-# ==============================
-# PAIR DATABASE
-# ==============================
 PAIRS = {
-    # METALS
-    "XAUUSD": {"symbol": "XAUUSD", "screener": "cfd", "exchange": "FOREXCOM", "name": "XAU/USD", "cat": "METALS", "yf": "GC=F", "sl": (3.0, 6.0), "tp": (6.0, 12.0)},
-    "XAGUSD": {"symbol": "SILVER", "screener": "cfd", "exchange": "TVC", "name": "XAG/USD", "cat": "METALS", "yf": "SI=F", "sl": (0.12, 0.30), "tp": (0.25, 0.60)},
-
-    # FOREX
-    "EURUSD": {"symbol": "EURUSD", "screener": "forex", "exchange": "FX_IDC", "name": "EUR/USD", "cat": "FOREX", "yf": "EURUSD=X", "sl": (0.0015, 0.0030), "tp": (0.0030, 0.0060)},
-    "GBPUSD": {"symbol": "GBPUSD", "screener": "forex", "exchange": "FX_IDC", "name": "GBP/USD", "cat": "FOREX", "yf": "GBPUSD=X", "sl": (0.0020, 0.0040), "tp": (0.0040, 0.0080)},
-    "USDJPY": {"symbol": "USDJPY", "screener": "forex", "exchange": "FX_IDC", "name": "USD/JPY", "cat": "FOREX", "yf": "JPY=X", "sl": (0.20, 0.45), "tp": (0.40, 0.90)},
-    "AUDUSD": {"symbol": "AUDUSD", "screener": "forex", "exchange": "FX_IDC", "name": "AUD/USD", "cat": "FOREX", "yf": "AUDUSD=X", "sl": (0.0015, 0.0030), "tp": (0.0030, 0.0060)},
-    "USDCAD": {"symbol": "USDCAD", "screener": "forex", "exchange": "FX_IDC", "name": "USD/CAD", "cat": "FOREX", "yf": "CAD=X", "sl": (0.0020, 0.0040), "tp": (0.0040, 0.0080)},
-
-    # INDICES
-    "NAS100": {"symbol": "NAS100", "screener": "cfd", "exchange": "OANDA", "name": "NAS100", "cat": "INDEX", "yf": "NQ=F", "sl": (30, 90), "tp": (70, 180)},
-    "US30": {"symbol": "US30", "screener": "cfd", "exchange": "OANDA", "name": "US30", "cat": "INDEX", "yf": "YM=F", "sl": (60, 160), "tp": (140, 320)},
-    "SPX500": {"symbol": "SPX500USD", "screener": "cfd", "exchange": "OANDA", "name": "SPX500", "cat": "INDEX", "yf": "ES=F", "sl": (12, 35), "tp": (25, 75)},
-
-    # CRYPTO
-    "BTCUSD": {"symbol": "BTCUSD", "screener": "crypto", "exchange": "BITSTAMP", "name": "BTC/USD", "cat": "CRYPTO", "yf": "BTC-USD", "sl": (120, 350), "tp": (250, 800)},
-    "ETHUSD": {"symbol": "ETHUSD", "screener": "crypto", "exchange": "BITSTAMP", "name": "ETH/USD", "cat": "CRYPTO", "yf": "ETH-USD", "sl": (10, 45), "tp": (25, 110)},
-    "SOLUSD": {"symbol": "SOLUSD", "screener": "crypto", "exchange": "BINANCE", "name": "SOL/USD", "cat": "CRYPTO", "yf": "SOL-USD", "sl": (1.0, 4.0), "tp": (2.5, 9.0)},
-    "BNBUSD": {"symbol": "BNBUSD", "screener": "crypto", "exchange": "BINANCE", "name": "BNB/USD", "cat": "CRYPTO", "yf": "BNB-USD", "sl": (4, 16), "tp": (10, 35)},
-    "XRPUSD": {"symbol": "XRPUSD", "screener": "crypto", "exchange": "BITSTAMP", "name": "XRP/USD", "cat": "CRYPTO", "yf": "XRP-USD", "sl": (0.025, 0.080), "tp": (0.055, 0.160)},
-
-    # OIL
-    "USOIL": {"symbol": "USOIL", "screener": "cfd", "exchange": "TVC", "name": "USOIL / WTI", "cat": "OIL", "yf": "CL=F", "sl": (0.35, 0.90), "tp": (0.80, 1.90)},
-    "UKOIL": {"symbol": "UKOIL", "screener": "cfd", "exchange": "TVC", "name": "UKOIL / BRENT", "cat": "OIL", "yf": "BZ=F", "sl": (0.35, 0.90), "tp": (0.80, 1.90)},
+    "XAUUSD": {"name": "XAU/USD", "td": ["XAU/USD", "XAUUSD"]},
+    "XAGUSD": {"name": "XAG/USD", "td": ["XAG/USD", "XAGUSD"]},
+    "BTCUSD": {"name": "BTC/USD", "td": ["BTC/USD", "BTCUSD"]},
+    "ETHUSD": {"name": "ETH/USD", "td": ["ETH/USD", "ETHUSD"]},
+    "EURUSD": {"name": "EUR/USD", "td": ["EUR/USD", "EURUSD"]},
+    "GBPUSD": {"name": "GBP/USD", "td": ["GBP/USD", "GBPUSD"]},
+    "USDJPY": {"name": "USD/JPY", "td": ["USD/JPY", "USDJPY"]},
+    "NAS100": {"name": "NAS100", "td": ["NAS100", "NDX", "NQ"]},
+    "US30": {"name": "US30", "td": ["DJI", "US30"]},
 }
 
-TIMEFRAMES = {"M1": "1m", "M3": "3m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "1h", "H4": "4h", "DAILY": "1d"}
-YF_INTERVAL = {"M1": "1m", "M3": "5m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "60m", "H4": "60m", "DAILY": "1d"}
 
-IMPORTANT_NEWS_KEYWORDS = ["NFP", "Non-Farm", "Nonfarm", "CPI", "Core CPI", "PPI", "PCE", "Core PCE", "FOMC", "Federal Funds Rate", "PMI", "ISM", "GDP", "Unemployment", "Average Hourly Earnings"]
+STOCK_WATCHLIST = {
+    "BBCA.JK": "Bank Central Asia",
+    "BBRI.JK": "Bank Rakyat Indonesia",
+    "BMRI.JK": "Bank Mandiri",
+    "TLKM.JK": "Telkom Indonesia",
+    "ANTM.JK": "Aneka Tambang",
+    "MDKA.JK": "Merdeka Copper Gold",
+    "GOTO.JK": "GoTo",
+    "ADRO.JK": "Adaro Energy",
+    "AMMN.JK": "Amman Mineral",
+    "BRPT.JK": "Barito Pacific",
+    "AAPL": "Apple",
+    "MSFT": "Microsoft",
+    "NVDA": "NVIDIA",
+    "TSLA": "Tesla",
+    "AMZN": "Amazon",
+    "GOOGL": "Alphabet",
+    "META": "Meta",
+    "AMD": "AMD",
+    "PLTR": "Palantir",
+}
 
-# ==============================
-# JSON DATABASE
-# ==============================
-def load_json(path, default):
-    if not os.path.exists(path):
-        return default
+TIMEFRAMES = {
+    "M1": "1min",
+    "M5": "5min",
+    "M15": "15min",
+    "M30": "30min",
+    "H1": "1h",
+    "H4": "4h",
+}
+
+def now_wib():
+    return datetime.now(WIB)
+
+def fmt(x):
     try:
+        x = float(x)
+        if abs(x) >= 1000:
+            return f"{x:,.2f}"
+        if abs(x) >= 10:
+            return f"{x:.2f}"
+        return f"{x:.5f}"
+    except Exception:
+        return str(x)
+
+def load_json(path, default):
+    try:
+        if not os.path.exists(path):
+            return default
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return default
 
-
 def save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-
-def wib_now():
-    return datetime.utcnow() + timedelta(hours=7)
-
-
-def fmt(x):
-    try:
-        x = float(x)
-        if abs(x) < 10:
-            return f"{x:.5f}"
-        if abs(x) < 100:
-            return f"{x:.3f}"
-        return f"{x:.2f}"
-    except Exception:
-        return "-"
-
-
-def clean_num(value):
-    m = re.search(r"-?\d+(\.\d+)?", str(value).replace(",", ""))
-    return float(m.group(0)) if m else None
-
-
-def conf_bar(conf):
-    full = max(0, min(10, int(conf / 10)))
-    return "█" * full + "░" * (10 - full)
-
+        json.dump(data, f, indent=2)
 
 def get_user(user_id):
-    users = load_json(USER_FILE, {})
+    db = load_json(USER_STATE_FILE, {})
     uid = str(user_id)
-    if uid not in users:
-        users[uid] = {"market_used": 0, "news_used": 0, "premium": False, "premium_until": None, "created_at": wib_now().strftime("%Y-%m-%d %H:%M:%S")}
-        save_json(USER_FILE, users)
+    if uid not in db:
+        db[uid] = {"pair": "XAUUSD", "tf": "M5"}
+        save_json(USER_STATE_FILE, db)
+    return db[uid]
 
-    if int(uid) == ADMIN_ID:
-        users[uid]["premium"] = True
-        users[uid]["premium_until"] = "LIFETIME"
-        save_json(USER_FILE, users)
-        return users[uid]
+def save_user(user_id, user):
+    db = load_json(USER_STATE_FILE, {})
+    db[str(user_id)] = user
+    save_json(USER_STATE_FILE, db)
 
-    u = users[uid]
-    if u.get("premium") and u.get("premium_until") not in [None, "LIFETIME"]:
+def disclaimer():
+    return """
+━━━━━━━━━━━━━━━━━━━━
+⚠️ <b>DISCLAIMER</b> ⚠️
+
+Bukan saran finansial.
+Trading memiliki risiko tinggi.
+Gunakan stop loss dan money management.
+━━━━━━━━━━━━━━━━━━━━
+"""
+
+def fetch_td_candles(pair_key, tf="M5", outputsize=180):
+    if not TD_API_KEY:
+        raise RuntimeError("TD_API_KEY belum diisi di Railway Variables.")
+
+    url = "https://api.twelvedata.com/time_series"
+    last_error = None
+    for symbol in PAIRS[pair_key]["td"]:
         try:
-            if wib_now() > datetime.strptime(u["premium_until"], "%Y-%m-%d %H:%M:%S"):
-                u["premium"] = False
-                u["expired_at"] = wib_now().strftime("%Y-%m-%d %H:%M:%S")
-                users[uid] = u
-                save_json(USER_FILE, users)
-        except Exception:
-            pass
-    return users[uid]
+            params = {
+                "symbol": symbol,
+                "interval": TIMEFRAMES.get(tf, "5min"),
+                "outputsize": outputsize,
+                "apikey": TD_API_KEY,
+                "format": "JSON",
+                "timezone": "Asia/Jakarta",
+            }
+            r = requests.get(url, params=params, timeout=20)
+            data = r.json()
+            if data.get("status") == "error":
+                last_error = data.get("message", "TwelveData error")
+                continue
 
+            values = data.get("values", [])
+            if not values:
+                last_error = "Candle kosong."
+                continue
 
-def update_user(user_id, data):
-    users = load_json(USER_FILE, {})
-    users[str(user_id)] = data
-    save_json(USER_FILE, users)
+            candles = []
+            for v in reversed(values):
+                candles.append({
+                    "Open": float(v["open"]),
+                    "High": float(v["high"]),
+                    "Low": float(v["low"]),
+                    "Close": float(v["close"]),
+                    "Time": v.get("datetime", ""),
+                })
+            return candles
+        except Exception as e:
+            last_error = str(e)
 
+    raise RuntimeError(last_error or "TwelveData gagal.")
 
-def can_use_market(user_id):
-    u = get_user(user_id)
-    return u.get("premium") or u.get("market_used", 0) < TRIAL_LIMIT_MARKET
+def fetch_td_quote(pair_key):
+    if not TD_API_KEY:
+        raise RuntimeError("TD_API_KEY belum diisi di Railway Variables.")
 
-
-def can_use_news(user_id):
-    u = get_user(user_id)
-    return u.get("premium") or u.get("news_used", 0) < TRIAL_LIMIT_NEWS
-
-
-def add_usage(user_id, kind="market"):
-    u = get_user(user_id)
-    if not u.get("premium"):
-        key = "market_used" if kind == "market" else "news_used"
-        u[key] = u.get(key, 0) + 1
-        update_user(user_id, u)
-
-
-def premium_user_ids():
-    users = load_json(USER_FILE, {})
-    ids = []
-    for uid in users.keys():
+    url = "https://api.twelvedata.com/quote"
+    last_error = None
+    for symbol in PAIRS[pair_key]["td"]:
         try:
-            if get_user(int(uid)).get("premium"):
-                ids.append(uid)
-        except Exception:
-            pass
-    return ids
+            r = requests.get(url, params={"symbol": symbol, "apikey": TD_API_KEY}, timeout=12)
+            data = r.json()
+            if data.get("status") == "error":
+                last_error = data.get("message", "Quote error")
+                continue
+            for k in ["close", "price", "bid"]:
+                val = data.get(k)
+                if val not in [None, "", "None"]:
+                    return float(val), "TwelveData Live"
+        except Exception as e:
+            last_error = str(e)
+    raise RuntimeError(last_error or "Quote gagal.")
 
-# ==============================
-# MARKET DATA ENGINE
-# ==============================
-def cache_get(key):
-    item = MARKET_CACHE.get(key)
-    if not item:
-        return None
-    if pytime.time() - item["ts"] <= MARKET_CACHE_SECONDS:
-        return item["value"]
+def tail(c, n):
+    return c[-n:] if len(c) >= n else c
+
+def highs(c):
+    return [x["High"] for x in c]
+
+def lows(c):
+    return [x["Low"] for x in c]
+
+def avg_range(c, n=20):
+    cs = tail(c, n)
+    return sum(abs(x["High"] - x["Low"]) for x in cs) / max(len(cs), 1)
+
+def structure_bias(c):
+    if len(c) < 60:
+        return "SIDEWAYS"
+    cs = tail(c, 60)
+    hi, lo = max(highs(cs)), min(lows(cs))
+    eq = (hi + lo) / 2
+    last = c[-1]["Close"]
+    first = c[-30]["Close"]
+    if last > first and last > eq:
+        return "BUY"
+    if last < first and last < eq:
+        return "SELL"
+    return "SIDEWAYS"
+
+def premium_discount(c, price):
+    cs = tail(c, 80)
+    hi, lo = max(highs(cs)), min(lows(cs))
+    eq = (hi + lo) / 2
+    return ("DISCOUNT" if price < eq else "PREMIUM" if price > eq else "EQ", eq, hi, lo)
+
+def find_fvg(c, direction):
+    avg = avg_range(c, 20)
+    for i in range(len(c)-1, 2, -1):
+        c0, c2 = c[i-2], c[i]
+        if direction == "BUY":
+            low, high = c0["High"], c2["Low"]
+            if high > low and high - low >= avg * 0.08:
+                return {"low": low, "high": high, "mid": (low + high) / 2, "type": "FVG"}
+        else:
+            low, high = c2["High"], c0["Low"]
+            if high > low and high - low >= avg * 0.08:
+                return {"low": low, "high": high, "mid": (low + high) / 2, "type": "FVG"}
     return None
 
+def find_ob(c, direction):
+    avg = avg_range(c, 20)
+    for i in range(len(c)-3, 3, -1):
+        x, n = c[i], c[i+1]
+        xdir = "BULLISH" if x["Close"] > x["Open"] else "BEARISH"
+        ndir = "BULLISH" if n["Close"] > n["Open"] else "BEARISH"
+        nrng = abs(n["High"] - n["Low"])
+        if direction == "BUY" and xdir == "BEARISH" and ndir == "BULLISH" and nrng >= avg * 0.8:
+            return {"low": x["Low"], "high": x["Open"], "mid": (x["Low"] + x["Open"]) / 2, "type": "OB"}
+        if direction == "SELL" and xdir == "BULLISH" and ndir == "BEARISH" and nrng >= avg * 0.8:
+            return {"low": x["Open"], "high": x["High"], "mid": (x["Open"] + x["High"]) / 2, "type": "OB"}
+    return None
 
-def cache_set(key, value):
-    MARKET_CACHE[key] = {"ts": pytime.time(), "value": value}
+def find_crt(c, direction):
+    if len(c) < 5:
+        return None
+    ref, last = c[-2], c[-1]
+    hi, lo = ref["High"], ref["Low"]
+    rng = max(hi - lo, 0.0001)
+    mid = (hi + lo) / 2
+    if direction == "BUY" and last["Low"] < lo and last["Close"] > lo:
+        z1, z2 = lo + rng * 0.21, mid
+        return {"low": min(z1, z2), "high": max(z1, z2), "mid": (z1 + z2) / 2, "type": "CRT"}
+    if direction == "SELL" and last["High"] > hi and last["Close"] < hi:
+        z1, z2 = mid, hi - rng * 0.21
+        return {"low": min(z1, z2), "high": max(z1, z2), "mid": (z1 + z2) / 2, "type": "CRT"}
+    return None
 
+def overlap(a, b):
+    if not a or not b:
+        return None
+    low, high = max(a["low"], b["low"]), min(a["high"], b["high"])
+    if high > low:
+        return {"low": low, "high": high, "mid": (low + high) / 2, "type": f"{a['type']} + {b['type']}"}
+    return None
 
-def yf_period(tf):
-    if tf in ["M1", "M3", "M5", "M15", "M30"]:
-        return "5d"
-    if tf in ["H1", "H4"]:
-        return "1mo"
-    return "6mo"
-
-
-def calc_rsi(closes, period=14):
-    try:
-        delta = closes.diff()
-        gain = delta.clip(lower=0).rolling(period).mean()
-        loss = (-delta.clip(upper=0)).rolling(period).mean().replace(0, 0.00001)
-        rs = gain / loss
-        return float((100 - (100 / (1 + rs))).iloc[-1])
-    except Exception:
-        return 50.0
-
-
-def fetch_yf(pair_key, tf):
-    if yf is None:
-        raise Exception("Install yfinance dulu di requirements.txt")
-    pair = PAIRS[pair_key]
-    data = yf.download(pair["yf"], period=yf_period(tf), interval=YF_INTERVAL.get(tf, "5m"), progress=False, auto_adjust=False)
-    if data is None or data.empty:
-        raise Exception("Yahoo fallback kosong")
-    if tf == "H4" and len(data) >= 4:
-        block = data.tail(4)
-        open_price = float(block["Open"].iloc[0])
-        close = float(block["Close"].iloc[-1])
-        high = float(block["High"].max())
-        low = float(block["Low"].min())
-        closes = data["Close"].astype(float)
+def fallback_zone(price, atr, direction, pair_key):
+    if pair_key == "XAUUSD":
+        width, pullback = max(atr * 0.15, 0.20), max(atr * 0.22, 0.25)
+    elif pair_key in ["BTCUSD", "ETHUSD", "NAS100", "US30"]:
+        width, pullback = max(atr * 0.20, price * 0.0007), max(atr * 0.25, price * 0.0008)
     else:
-        last = data.iloc[-1]
-        open_price = float(last["Open"])
-        close = float(last["Close"])
-        high = float(last["High"])
-        low = float(last["Low"])
-        closes = data["Close"].astype(float)
-    ema20 = float(closes.ewm(span=20, adjust=False).mean().iloc[-1]) if len(closes) >= 20 else close
-    ema50 = float(closes.ewm(span=50, adjust=False).mean().iloc[-1]) if len(closes) >= 50 else close
-    rsi = calc_rsi(closes)
-    return build_tf_data(close, open_price, high, low, ema20, ema50, rsi, "Yahoo Finance")
-
-
-def build_tf_data(price, open_price, high, low, ema20, ema50, rsi, source):
-    rng = max(abs(high - low), 0.00001)
-    candle = "BULLISH" if price >= open_price else "BEARISH"
-    if price > ema20 > ema50:
-        bias = "BULLISH"
-    elif price < ema20 < ema50:
-        bias = "BEARISH"
+        width, pullback = max(atr * 0.20, 0.00025), max(atr * 0.25, 0.00030)
+    if direction == "BUY":
+        high, low = price - pullback, price - pullback - width
     else:
-        bias = "SIDEWAYS"
-    return {"price": float(price), "open": float(open_price), "high": float(high), "low": float(low), "eq": (float(high) + float(low)) / 2, "range": rng, "ema20": float(ema20), "ema50": float(ema50), "rsi": float(rsi), "candle": candle, "bias": bias, "source": source}
+        low, high = price + pullback, price + pullback + width
+    return {"low": min(low, high), "high": max(low, high), "mid": (low + high) / 2, "type": "Realtime Pullback"}
 
+def risk_pips(pair_key, entry, sl):
+    diff = abs(entry - sl)
+    if pair_key in ["XAUUSD", "XAGUSD"]:
+        return diff * 100
+    if pair_key == "USDJPY":
+        return diff * 100
+    if pair_key in ["BTCUSD", "ETHUSD", "NAS100", "US30"]:
+        return diff
+    return diff * 10000
 
-def fetch_tv(pair_key, tf):
+def build_analysis(pair_key, tf_key):
     pair = PAIRS[pair_key]
-    handler = TA_Handler(symbol=pair["symbol"], screener=pair["screener"], exchange=pair["exchange"], interval=TIMEFRAMES.get(tf, "5m"))
-    data = handler.get_analysis()
-    ind = data.indicators
-    price = ind.get("close")
-    high = ind.get("high")
-    low = ind.get("low")
-    open_price = ind.get("open") or price
-    ema20 = ind.get("EMA20") or price
-    ema50 = ind.get("EMA50") or price
-    rsi = ind.get("RSI") or 50
-    if price is None or high is None or low is None:
-        raise Exception("TradingView data belum lengkap")
-    return build_tf_data(float(price), float(open_price), float(high), float(low), float(ema20), float(ema50), float(rsi), "TradingView")
-
-
-def fetch_tf(pair_key, tf):
-    key = f"raw_{pair_key}_{tf}"
-    cached = cache_get(key)
-    if cached:
-        return cached
     try:
-        result = fetch_tv(pair_key, tf)
+        c_m5 = fetch_td_candles(pair_key, "M5")
+        c_m15 = fetch_td_candles(pair_key, "M15")
+        c_h1 = fetch_td_candles(pair_key, "H1")
+        c_h4 = fetch_td_candles(pair_key, "H4")
+        try:
+            price, source = fetch_td_quote(pair_key)
+        except Exception:
+            price, source = c_m5[-1]["Close"], "Candle Fallback"
     except Exception as e:
-        print("TV fallback:", pair_key, tf, e)
-        result = fetch_yf(pair_key, tf)
-    cache_set(key, result)
-    return result
+        return f"⚠️ <b>MARKET DATA ERROR</b>\n\nPair: <b>{pair['name']}</b>\nDetail: <code>{type(e).__name__}: {str(e)[:180]}</code>\n\nCek TD_API_KEY / kuota TwelveData."
 
-# ==============================
-# SMC / ICT PREMIUM ENGINE
-# ==============================
-def session_info():
-    h = wib_now().hour
-    if 5 <= h < 14:
-        return "Asia Session", 4, "Market sering lebih kalem. Fokus sniper/retest, jangan kejar candle."
-    if 14 <= h < 20:
-        return "London Session", 10, "Volume mulai masuk. Validasi MSS + POI lebih penting."
-    return "New York Session", 10, "Volatilitas tinggi. Wajib kecilkan lot dan tunggu close candle."
+    exec_c = c_m5 if tf_key in ["M1", "M5"] else c_m15
+    atr = avg_range(exec_c, 20)
 
+    h4, h1, m15, m5 = structure_bias(c_h4), structure_bias(c_h1), structure_bias(c_m15), structure_bias(c_m5)
+    location, eq, rh, rl = premium_discount(c_h1, price)
 
-def sl_tp_distance(pair_key, market_range):
-    min_sl, max_sl = PAIRS[pair_key]["sl"]
-    min_tp, max_tp = PAIRS[pair_key]["tp"]
-    sl = max(min_sl, min(market_range * 0.85, max_sl))
-    tp = max(min_tp, min(sl * 2.2, max_tp))
-    return sl, tp
+    votes = [h4, h1, m15, m5]
+    buy_votes, sell_votes = votes.count("BUY"), votes.count("SELL")
+    if buy_votes > sell_votes:
+        direction = "BUY"
+    elif sell_votes > buy_votes:
+        direction = "SELL"
+    else:
+        direction = "BUY" if location == "DISCOUNT" else "SELL"
 
+    fvg, ob, crt = find_fvg(exec_c, direction), find_ob(exec_c, direction), find_crt(exec_c, direction)
+    score, reasons = 45, []
 
-def market_status(price, h1, m15, m5):
-    aligned = len({h1["bias"], m15["bias"], m5["bias"]}) == 1 and h1["bias"] != "SIDEWAYS"
-    rng_pct = (m5["range"] / max(price, 0.0001)) * 100
-    if aligned and rng_pct > 0.03:
-        return "🟢 TRENDING"
-    if m15["bias"] == "SIDEWAYS" or m5["bias"] == "SIDEWAYS":
-        return "🟡 SIDEWAYS"
-    return "🔴 CHOPPY"
+    for label, bias, points in [("H4 searah", h4, 12), ("H1 searah", h1, 12), ("M15 searah", m15, 8)]:
+        if bias == direction:
+            score += points
+            reasons.append(label)
+    if fvg:
+        score += 8
+        reasons.append("FVG")
+    if ob:
+        score += 8
+        reasons.append("OB")
+    if crt:
+        score += 6
+        reasons.append("CRT")
+    if direction == "BUY" and location == "DISCOUNT":
+        score += 6
+        reasons.append("Discount")
+    if direction == "SELL" and location == "PREMIUM":
+        score += 6
+        reasons.append("Premium")
+    score = min(score, 95)
 
+    zone = overlap(fvg, ob) or overlap(fvg, crt) or overlap(ob, crt) or fvg or ob or crt
+    zone_name = zone["type"] if zone else "Realtime Pullback"
+    if not zone:
+        zone = fallback_zone(price, atr, direction, pair_key)
+        reasons.append("Pullback realtime")
 
-def liquidity_heatmap(h1, m15, m5):
-    buy_levels = sorted([h1["high"], m15["high"], m5["high"]], reverse=True)
-    sell_levels = sorted([h1["low"], m15["low"], m5["low"]])
-    return buy_levels[:3], sell_levels[:3]
+    max_dist = max(atr * 1.5, 0.80 if pair_key == "XAUUSD" else abs(price) * 0.001)
+    if abs(zone["mid"] - price) > max_dist:
+        zone = fallback_zone(price, atr, direction, pair_key)
+        zone_name = "Realtime Pullback"
+        score = max(55, score - 10)
+        reasons.append("Entry dekat harga realtime")
 
+    entry_low, entry_high, entry = zone["low"], zone["high"], zone["mid"]
 
-def calc_smc_score(signal, price, h1, m15, m5, session_score):
-    htf = 20 if (signal == "BUY" and h1["bias"] == "BULLISH") or (signal == "SELL" and h1["bias"] == "BEARISH") else 10
-    poi = 20 if (signal == "BUY" and price <= m15["eq"]) or (signal == "SELL" and price >= m15["eq"]) else 9
-    liq = 20 if (signal == "BUY" and (m5["low"] <= m15["low"] or price <= m5["eq"])) or (signal == "SELL" and (m5["high"] >= m15["high"] or price >= m5["eq"])) else 10
-    mss = 20 if (signal == "BUY" and (m5["candle"] == "BULLISH" or price > m5["ema20"])) or (signal == "SELL" and (m5["candle"] == "BEARISH" or price < m5["ema20"])) else 8
-    timing = min(20, session_score * 2)
-    total = htf + poi + liq + mss + timing
-    return {"HTF": htf, "POI": poi, "Liquidity": liq, "MSS": mss, "Timing": timing, "Total": total}
+    if direction == "BUY":
+        if pair_key == "XAUUSD":
+            sl, tp1, tp2 = entry - 0.40, entry + 0.60, entry + 0.90
+        else:
+            sl = entry - max(atr * 0.9, abs(entry) * 0.0012)
+            risk = max(entry - sl, 0.0001)
+            tp1, tp2 = entry + risk * 1.3, entry + risk * 2.0
+    else:
+        if pair_key == "XAUUSD":
+            sl, tp1, tp2 = entry + 0.40, entry - 0.60, entry - 0.90
+        else:
+            sl = entry + max(atr * 0.9, abs(entry) * 0.0012)
+            risk = max(sl - entry, 0.0001)
+            tp1, tp2 = entry - risk * 1.3, entry - risk * 2.0
 
+    rr = abs(tp2 - entry) / max(abs(entry - sl), 0.0001)
+    pips = risk_pips(pair_key, entry, sl)
+    trend = "BULLISH" if direction == "BUY" else "BEARISH"
+    icon = "🟢" if direction == "BUY" else "🔴"
+    blocks = "⬛" * max(1, int(score / 10)) + "⬜" * max(0, 10 - int(score / 10))
+    status = "HIGH PROBABILITY" if score >= 85 else "MEDIUM PROBABILITY" if score >= 70 else "LOW CONFIDENCE"
 
-def analyze_pair(pair_key, tf_key="M5", compact=False):
-    if pair_key not in PAIRS:
-        return "Pair belum tersedia."
-    tf_key = tf_key.upper().strip()
-    if tf_key not in TIMEFRAMES:
-        tf_key = "M5"
-    cache_key = f"analysis_{pair_key}_{tf_key}_{compact}"
-    cached = cache_get(cache_key)
-    if cached:
-        return cached
+    if not reasons:
+        reasons = ["Struktur market terbaca", "Entry dekat harga realtime"]
 
-    try:
-        tf = fetch_tf(pair_key, tf_key)
-        pytime.sleep(0.35)
-        h1 = fetch_tf(pair_key, "H1") if tf_key != "H1" else tf
-        pytime.sleep(0.35)
-        m15 = fetch_tf(pair_key, "M15") if tf_key != "M15" else tf
-        pytime.sleep(0.35)
-        m5 = fetch_tf(pair_key, "M5") if tf_key != "M5" else tf
-    except Exception as e:
-        return f"""
-👑 <b>CAPITAL ELITE PROJECT</b>
-<code>Market Data Sync</code>
+    ai = "Pasar cenderung bullish. Entry diambil dari area pullback/POI terdekat agar tidak mengejar harga." if direction == "BUY" else "Pasar cenderung bearish. Entry diambil dari area pullback/POI terdekat agar tidak mengejar harga."
 
-⚠️ Data market belum kebaca.
-Detail: <code>{type(e).__name__}: {str(e)[:160]}</code>
+    return f"""
+✦ 💎 <b>CAPITAL ELITE PROJECT</b> 💎 ✦
+━━━━━━━━━━━━━━━━━━━━
 
-Coba ulang 30-60 detik lagi.
+🗓️ <b>{now_wib().strftime("%d %B %Y pukul %H.%M WIB")}</b>
+💱 Pair : <b>{pair['name']}</b>
+⏱ Timeframe : <b>{tf_key}</b>
+
+━━━━━━━━━━━━━━━━━━━━
+🤖 <b>SINYAL TRADING AI</b>
+━━━━━━━━━━━━━━━━━━━━
+
+📈 Trend : <b>{trend}</b>
+🎯 Confidence : <b>{score}%</b> {blocks}
+📌 Status : <b>{status}</b>
+
+{icon} Sinyal : <b>{direction}</b>
+💰 Entry : <code>{fmt(entry)}</code>
+📍 Area : <code>{fmt(entry_low)} - {fmt(entry_high)}</code>
+⛔ Stop Loss : <code>{fmt(sl)}</code>
+🎯 Take Profit : <code>{fmt(tp2)}</code>
+
+━━━━━━━━━━━━━━━━━━━━
+🤖 <b>ANALISA AI</b>
+━━━━━━━━━━━━━━━━━━━━
+
+{ai}
+
+Validasi:
+✅ {" | ".join(reasons[:6])}
+⚖️ RR : <b>1:{rr:.2f}</b>
+📏 Risk : <b>{pips:.0f} pips</b>
+📌 Zone : <b>{zone_name}</b>
+📡 Source : <b>{source}</b>
+
+{disclaimer()}
 """
 
-    price = tf["price"]
-    session_tag, session_score, session_note = session_info()
-
-    buy_score = 0
-    sell_score = 0
-    if h1["bias"] == "BULLISH": buy_score += 28
-    if h1["bias"] == "BEARISH": sell_score += 28
-    if m15["bias"] in ["BULLISH", "SIDEWAYS"]: buy_score += 16
-    if m15["bias"] in ["BEARISH", "SIDEWAYS"]: sell_score += 16
-    if price <= m15["eq"]: buy_score += 15
-    if price >= m15["eq"]: sell_score += 15
-    if m5["low"] <= m15["low"] or price <= m5["eq"]: buy_score += 12
-    if m5["high"] >= m15["high"] or price >= m5["eq"]: sell_score += 12
-    if m5["candle"] == "BULLISH" or price > m5["ema20"]: buy_score += 12
-    if m5["candle"] == "BEARISH" or price < m5["ema20"]: sell_score += 12
-    buy_score += session_score
-    sell_score += session_score
-
-    signal = "BUY" if buy_score >= sell_score else "SELL"
-    score_gap = abs(buy_score - sell_score)
-    confidence = min(max(buy_score if signal == "BUY" else sell_score, 45), 96)
-    no_trade = confidence < 62 or score_gap < 8
-
-    smc = calc_smc_score(signal, price, h1, m15, m5, session_score)
-    buy_liq, sell_liq = liquidity_heatmap(h1, m15, m5)
-    status = market_status(price, h1, m15, m5)
-    sl_dist, tp_dist = sl_tp_distance(pair_key, tf["range"])
-
-    if signal == "BUY":
-        entry_low = price - sl_dist * 0.15
-        entry_high = price + sl_dist * 0.08
-        zf_low = min(price, m15["eq"]) - sl_dist * 0.35
-        zf_high = min(price, m15["eq"]) - sl_dist * 0.10
-        sl = min(m5["low"], m15["low"], zf_low - sl_dist * 0.45)
-        tp1 = price + tp_dist * 0.60
-        tp2 = price + tp_dist
-        tp3 = price + tp_dist * 1.45
-        action = "🟢 BUY PLAN"
-        invalid = "Invalid kalau low POI jebol dan candle close bearish kuat."
-        confluence = ["Discount POI", "Sell-side liquidity sweep", "Bullish MSS / recovery", session_note]
-    else:
-        entry_low = price - sl_dist * 0.08
-        entry_high = price + sl_dist * 0.15
-        zf_low = max(price, m15["eq"]) + sl_dist * 0.10
-        zf_high = max(price, m15["eq"]) + sl_dist * 0.35
-        sl = max(m5["high"], m15["high"], zf_high + sl_dist * 0.45)
-        tp1 = price - tp_dist * 0.60
-        tp2 = price - tp_dist
-        tp3 = price - tp_dist * 1.45
-        action = "🔴 SELL PLAN"
-        invalid = "Invalid kalau high POI jebol dan candle close bullish kuat."
-        confluence = ["Premium POI", "Buy-side liquidity sweep", "Bearish MSS / rejection", session_note]
-
-    grade = "A+" if confidence >= 88 and smc["Total"] >= 80 else "A" if confidence >= 78 else "B" if confidence >= 66 else "C"
-    setup_name = "💎 INSTITUTIONAL SETUP" if grade == "A+" else "🚀 SNIPER SETUP" if grade == "A" else "🟡 RETEST SETUP" if grade == "B" else "⚪ WAIT"
-    entry_mid = (entry_low + entry_high) / 2
-    rr = round(abs(tp2 - entry_mid) / max(abs(entry_mid - sl), 0.00001), 1)
-
-    if compact:
-        return {"pair": pair_key, "name": PAIRS[pair_key]["name"], "signal": "NO SETUP" if no_trade else signal, "confidence": confidence, "grade": grade, "price": price, "entry": (entry_low, entry_high), "sl": sl, "tp1": tp1, "tp2": tp2, "smc": smc, "status": status, "bias": (h1["bias"], m15["bias"], m5["bias"])}
-
-    if no_trade:
-        text = f"""
-👑 <b>CAPITAL ELITE INTELLIGENCE</b>
-<code>SMC/ICT Premium Engine</code>
-
-💱 <b>{PAIRS[pair_key]['name']}</b> | <b>{tf_key}</b> • {session_tag}
-{status}
-⚪ <b>NO TRADE ZONE</b>
-
-📌 <b>Bias</b>
-H1: <b>{h1['bias']}</b>
-M15: <b>{m15['bias']}</b>
-M5: <b>{m5['bias']}</b>
-
-🔥 <b>Confidence</b>: <b>{confidence}%</b>
-{conf_bar(confidence)}
-🏆 Grade: <b>{grade}</b>
-🧠 SMC Score: <b>{smc['Total']}/100</b>
-
-🔥 <b>Liquidity Heatmap</b>
-BSL: <code>{fmt(buy_liq[0])}</code> / <code>{fmt(buy_liq[1])}</code>
-SSL: <code>{fmt(sell_liq[0])}</code> / <code>{fmt(sell_liq[1])}</code>
-
-🛡️ <b>Elite Note</b>
-Edge belum bersih. Tunggu sweep + close candle valid.
-
-⚠️ <b>DISCLAIMER</b>
-Bukan saran finansial. Trading berisiko tinggi.
-"""
-        cache_set(cache_key, text)
-        return text
-
-    trade_id = log_signal(pair_key, tf_key, signal, entry_low, entry_high, sl, tp1, tp2, confidence, grade)
+def main_menu(user_id):
+    user = get_user(user_id)
+    pair, tf = user.get("pair", "XAUUSD"), user.get("tf", "M5")
     text = f"""
-👑 <b>CAPITAL ELITE INTELLIGENCE</b>
-<code>V9 Premium • SMC/ICT Engine</code>
+👑 <b>CAPITAL ELITE PROJECT</b>
+<code>AI-Powered Trading Intelligence</code>
 
-💱 <b>{PAIRS[pair_key]['name']}</b> | <b>{tf_key}</b> • {session_tag}
-{status}
-{setup_name}
-<b>{action}</b>
+💱 Pair aktif: <b>{PAIRS[pair]['name']}</b>
+⏱ TF aktif: <b>{tf}</b>
 
-📌 <b>Market Bias</b>
-H1: <b>{h1['bias']}</b>
-M15: <b>{m15['bias']}</b>
-M5: <b>{m5['bias']}</b>
-Price: <code>{fmt(price)}</code>
+📊 <b>Market Analysis</b>
+Selalu kasih Entry • SL • TP
 
-⚡ <b>Entry Area</b>
-<code>{fmt(entry_low)} - {fmt(entry_high)}</code>
+📈 <b>Stock Analysis</b>
+IDX & US Stocks • Scanner breakout
 
-💎 <b>Zero Floating Zone</b>
-<code>{fmt(zf_low)} - {fmt(zf_high)}</code>
-
-🛑 <b>Stop Loss</b>
-<code>{fmt(sl)}</code>
-
-🎯 <b>Take Profit</b>
-TP1: <code>{fmt(tp1)}</code>
-TP2: <code>{fmt(tp2)}</code>
-TP3: <code>{fmt(tp3)}</code>
-
-🔥 <b>Liquidity Heatmap</b>
-BSL: <code>{fmt(buy_liq[0])}</code> / <code>{fmt(buy_liq[1])}</code>
-SSL: <code>{fmt(sell_liq[0])}</code> / <code>{fmt(sell_liq[1])}</code>
-
-🧠 <b>Smart Money Score</b>
-Liquidity: <b>{smc['Liquidity']}/20</b>
-MSS: <b>{smc['MSS']}/20</b>
-POI: <b>{smc['POI']}/20</b>
-HTF: <b>{smc['HTF']}/20</b>
-Timing: <b>{smc['Timing']}/20</b>
-TOTAL: <b>{smc['Total']}/100</b>
-
-📊 <b>Elite Grade</b>
-Grade: <b>{grade}</b>
-Confidence: <b>{confidence}%</b>
-{conf_bar(confidence)}
-RR Target: <b>1:{rr}</b>
-Trade ID: <code>{trade_id}</code>
-
-🧩 <b>Confluence</b>
-• {confluence[0]}
-• {confluence[1]}
-• {confluence[2]}
-• {confluence[3]}
-
-🛡️ <b>Management</b>
-Entry kecil dulu. TP1 kena → geser SL ke BE.
-{invalid}
-
-⚠️ <b>DISCLAIMER</b>
-Bukan saran finansial. Trading berisiko tinggi.
+🧠 <b>AI Vision</b>
+Kirim screenshot chart + caption pair/TF
 """
-    cache_set(cache_key, text)
-    return text
-
-# ==============================
-# JOURNAL / DASHBOARD
-# ==============================
-def log_signal(pair, tf, direction, entry_low, entry_high, sl, tp1, tp2, confidence, grade):
-    logs = load_json(SIGNAL_LOG_FILE, [])
-    trade_id = f"CE{wib_now().strftime('%y%m%d%H%M%S')}{random.randint(10,99)}"
-    item = {"id": trade_id, "time": wib_now().strftime("%Y-%m-%d %H:%M:%S"), "pair": pair, "tf": tf, "direction": direction, "entry_low": entry_low, "entry_high": entry_high, "sl": sl, "tp1": tp1, "tp2": tp2, "confidence": confidence, "grade": grade, "status": "OPEN"}
-    logs.append(item)
-    save_json(SIGNAL_LOG_FILE, logs[-300:])
-    history = load_json(TRADE_HISTORY_FILE, [])
-    history.append(item)
-    save_json(TRADE_HISTORY_FILE, history[-500:])
-    return trade_id
-
-
-def update_trade_result(trade_id, result):
-    result = result.upper()
-    if result not in ["WIN", "LOSS", "BE", "OPEN"]:
-        return False
-    changed = False
-    for path in [SIGNAL_LOG_FILE, TRADE_HISTORY_FILE]:
-        rows = load_json(path, [])
-        for row in rows:
-            if row.get("id") == trade_id:
-                row["status"] = result
-                row["closed_at"] = wib_now().strftime("%Y-%m-%d %H:%M:%S")
-                changed = True
-        save_json(path, rows)
-    return changed
-
-
-def performance_text():
-    rows = load_json(TRADE_HISTORY_FILE, [])
-    closed = [r for r in rows if r.get("status") in ["WIN", "LOSS", "BE"]]
-    wins = len([r for r in closed if r.get("status") == "WIN"])
-    losses = len([r for r in closed if r.get("status") == "LOSS"])
-    be = len([r for r in closed if r.get("status") == "BE"])
-    total = len(closed)
-    winrate = round((wins / max(total, 1)) * 100, 1)
-    pf = round((wins * 2) / max(losses, 1), 2)
-    last = rows[-10:][::-1]
-    last_lines = ""
-    for r in last:
-        last_lines += f"• <code>{r.get('id')}</code> {r.get('pair')} {r.get('direction')} — <b>{r.get('status','OPEN')}</b>\n"
-    if not last_lines:
-        last_lines = "Belum ada journal."
-    return f"""
-📈 <b>CAPITAL ELITE PERFORMANCE</b>
-
-Total Closed: <b>{total}</b>
-WIN: <b>{wins}</b>
-LOSS: <b>{losses}</b>
-BE: <b>{be}</b>
-Winrate: <b>{winrate}%</b>
-Profit Factor Est: <b>{pf}</b>
-
-📒 <b>Last 10 Journal</b>
-{last_lines}
-"""
-
-# ==============================
-# NEWS ENGINE
-# ==============================
-def parse_forex_factory_today():
-    try:
-        url = "https://www.forexfactory.com/calendar"
-        headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
-        html = requests.get(url, headers=headers, timeout=15).text
-        rows = re.findall(r"<tr[^>]*calendar__row[^>]*>(.*?)</tr>", html, flags=re.S | re.I)
-        events = []
-        for row in rows:
-            txt = re.sub(r"<[^>]+>", " ", row)
-            txt = re.sub(r"\s+", " ", txt).strip()
-            if " USD " not in (" " + txt + " "):
-                continue
-            if not any(k.lower() in txt.lower() for k in IMPORTANT_NEWS_KEYWORDS):
-                continue
-            impact = "HIGH" if "impact--high" in row or "High Impact" in row else "NEWS"
-            events.append({"raw": txt[:220], "impact": impact})
-        return events[:8]
-    except Exception:
-        return []
-
-
-def news_ai(news_type, actual, forecast, previous=None):
-    nt = news_type.lower()
-    a = clean_num(actual)
-    f = clean_num(forecast)
-    if a is None or f is None:
-        return "Format salah. Contoh: /news cpi actual=3.2 forecast=3.4 previous=3.5"
-    usd = "NEUTRAL"
-    reason = "Actual mendekati forecast. Market bisa choppy."
-    conf = 65
-    lower_is_good_for_usd = ["unemployment", "jobless"]
-    higher_hot = ["cpi", "ppi", "pce"]
-    higher_growth = ["nfp", "nonfarm", "pmi", "ism", "gdp", "earnings", "retail"]
-    if any(x in nt for x in lower_is_good_for_usd):
-        if a < f: usd, reason, conf = "BULLISH", "Unemployment lebih rendah dari forecast → USD kuat.", 86
-        elif a > f: usd, reason, conf = "BEARISH", "Unemployment lebih tinggi dari forecast → USD lemah.", 86
-    elif any(x in nt for x in higher_hot):
-        if a > f: usd, reason, conf = "BULLISH", "Inflasi lebih panas → Fed cenderung hawkish.", 88
-        elif a < f: usd, reason, conf = "BEARISH", "Inflasi lebih dingin → Fed cenderung dovish.", 88
-    elif any(x in nt for x in higher_growth):
-        if a > f: usd, reason, conf = "BULLISH", "Data ekonomi lebih kuat dari forecast → USD kuat.", 86
-        elif a < f: usd, reason, conf = "BEARISH", "Data ekonomi lebih lemah dari forecast → USD lemah.", 86
-    if usd == "BULLISH":
-        xau, btc, index = "SELL", "SELL / RISK-OFF", "SELL / CAUTION"
-    elif usd == "BEARISH":
-        xau, btc, index = "BUY", "BUY / RISK-ON", "BUY / RISK-ON"
-    else:
-        xau = btc = index = "WAIT"
-    return f"""
-🚨 <b>NEWS AI IMPACT PRO</b>
-<code>{wib_now().strftime('%d-%m-%Y %H:%M WIB')}</code>
-
-📰 News: <b>{news_type.upper()}</b>
-Actual: <code>{actual}</code>
-Forecast: <code>{forecast}</code>
-Previous: <code>{previous if previous else '-'}</code>
-
-💵 USD Bias: <b>{usd}</b>
-🎯 Confidence: <b>{conf}%</b> {conf_bar(conf)}
-
-🥇 XAU/XAG: <b>{xau}</b>
-₿ Crypto: <b>{btc}</b>
-📈 Index: <b>{index}</b>
-
-✅ Reason:
-{reason}
-
-⚠️ Tunggu 1-2 candle M5 close setelah news. Jangan entry pas spread gila.
-"""
-
-# ==============================
-# MENUS
-# ==============================
-def keyboard_main():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Market Scan", callback_data="cat_menu")],
-        [InlineKeyboardButton("🎯 Sniper Scanner", callback_data="sniper_all")],
-        [InlineKeyboardButton("🌍 Session Bias", callback_data="session_bias")],
-        [InlineKeyboardButton("📈 Dashboard", callback_data="dashboard")],
-        [InlineKeyboardButton("📰 News Desk", callback_data="news_menu")],
-        [InlineKeyboardButton("👤 Akun", callback_data="account"), InlineKeyboardButton("💎 Upgrade", callback_data="upgrade")],
-        [InlineKeyboardButton("✅ Konfirmasi Bayar", callback_data="pay_menu")],
-    ])
-
-
-def main_text(user_id):
-    u = get_user(user_id)
-    status = "💎 <b>ELITE MEMBER</b>" if u.get("premium") else "🆓 <b>TRIAL MODE</b>"
-    left = "Unlimited" if u.get("premium") else f"Market {TRIAL_LIMIT_MARKET-u.get('market_used',0)}x • News {TRIAL_LIMIT_NEWS-u.get('news_used',0)}x"
-    return f"""
-👑 <b>CAPITAL ELITE PROJECT V9</b>
-<code>Premium Trading Intelligence System</code>
-
-{status}
-{left}
-
-✅ Multi Pair Scanner
-✅ Smart Money Score
-✅ Liquidity Heatmap
-✅ Session Bias
-✅ Auto Journal & Winrate
-✅ Auto Sniper Alert Premium
-✅ News AI Impact Pro
-✅ AI Vision Lite
-
-<code>Trade Smart • Trade Elite</code>
-"""
-
-
-def category_keyboard():
-    cats = [("🥇 Metals", "METALS"), ("💱 Forex", "FOREX"), ("📈 Index", "INDEX"), ("₿ Crypto", "CRYPTO"), ("🛢 Oil", "OIL")]
-    rows = [[InlineKeyboardButton(label, callback_data=f"cat_{cat}")] for label, cat in cats]
-    rows.append([InlineKeyboardButton("⬅️ Menu", callback_data="home")])
-    return InlineKeyboardMarkup(rows)
-
-
-def pairs_keyboard(cat):
-    rows = []
-    pairs = [k for k, v in PAIRS.items() if v["cat"] == cat]
-    for i in range(0, len(pairs), 2):
-        rows.append([InlineKeyboardButton(PAIRS[p]["name"], callback_data=f"pair_{p}") for p in pairs[i:i+2]])
-    rows.append([InlineKeyboardButton("⬅️ Kategori", callback_data="cat_menu")])
-    return InlineKeyboardMarkup(rows)
-
-
-def tf_keyboard(pair):
-    rows = [
-        [InlineKeyboardButton("M1", callback_data=f"tf_{pair}_M1"), InlineKeyboardButton("M5", callback_data=f"tf_{pair}_M5"), InlineKeyboardButton("M15", callback_data=f"tf_{pair}_M15")],
-        [InlineKeyboardButton("M30", callback_data=f"tf_{pair}_M30"), InlineKeyboardButton("H1", callback_data=f"tf_{pair}_H1"), InlineKeyboardButton("H4", callback_data=f"tf_{pair}_H4")],
-        [InlineKeyboardButton("DAILY", callback_data=f"tf_{pair}_DAILY")],
-        [InlineKeyboardButton("⬅️ Pair", callback_data=f"cat_{PAIRS[pair]['cat']}")]
+    kb = [
+        [InlineKeyboardButton("📊 Analisa Sekarang", callback_data="analyze")],
+        [InlineKeyboardButton("📈 Analisa Saham", callback_data="stock_menu")],
+        [InlineKeyboardButton("🚀 Top 10 Saham", callback_data="stock_top")],
+        [InlineKeyboardButton("🔥 Heatmap", callback_data="stock_heatmap"), InlineKeyboardButton("⭐ Watchlist", callback_data="stock_watchlist")],
+        [InlineKeyboardButton("💱 Ganti Pair", callback_data="pairs"), InlineKeyboardButton("⏱ Ganti TF", callback_data="tfs")],
+        [InlineKeyboardButton("🧠 Cara AI Vision", callback_data="vision_help")],
     ]
-    return InlineKeyboardMarkup(rows)
+    return text, InlineKeyboardMarkup(kb)
 
-# ==============================
-# HANDLERS
-# ==============================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(main_text(update.effective_user.id), reply_markup=keyboard_main(), parse_mode="HTML")
-
+    text, kb = main_menu(update.effective_user.id)
+    await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    uid = q.from_user.id
-    data = q.data
+    user_id, data = q.from_user.id, q.data
+    user = get_user(user_id)
 
     if data == "home":
-        await q.edit_message_text(main_text(uid), reply_markup=keyboard_main(), parse_mode="HTML")
-        return
-    if data == "cat_menu":
-        await q.edit_message_text("📊 <b>Pilih kategori pair:</b>", reply_markup=category_keyboard(), parse_mode="HTML")
-        return
-    if data.startswith("cat_"):
-        cat = data.replace("cat_", "")
-        await q.edit_message_text(f"📊 <b>{cat}</b>\nPilih pair:", reply_markup=pairs_keyboard(cat), parse_mode="HTML")
-        return
-    if data.startswith("pair_"):
-        pair = data.replace("pair_", "")
-        await q.edit_message_text(f"💱 <b>{PAIRS[pair]['name']}</b>\nPilih timeframe:", reply_markup=tf_keyboard(pair), parse_mode="HTML")
-        return
-    if data.startswith("tf_"):
-        if not can_use_market(uid):
-            await q.edit_message_text("🔒 Trial market habis. Upgrade premium untuk akses unlimited.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Upgrade", callback_data="upgrade")]]), parse_mode="HTML")
-            return
-        _, pair, tf = data.split("_")
-        await q.edit_message_text("🔍 Scanning liquidity...\n🧠 Validating SMC score...\n⚡ Building setup...")
-        text = analyze_pair(pair, tf)
-        add_usage(uid, "market")
-        u = get_user(uid)
-        if not u.get("premium"):
-            text += f"\n\n🆓 Sisa trial market: {TRIAL_LIMIT_MARKET-u.get('market_used',0)}"
-        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔁 Ulang", callback_data=f"pair_{pair}")], [InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
-        return
-    if data == "sniper_all":
-        if not can_use_market(uid):
-            await q.edit_message_text("🔒 Trial market habis. Upgrade premium untuk Sniper Scanner.", parse_mode="HTML")
-            return
-        await q.edit_message_text("🎯 Scanning top pairs M5/M15/H1...")
-        text = sniper_scan_text(["XAUUSD", "BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "NAS100", "US30", "USOIL"])
-        add_usage(uid, "market")
-        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
-        return
-    if data == "session_bias":
-        await q.edit_message_text(session_bias_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
-        return
-    if data == "dashboard":
-        await q.edit_message_text(performance_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
-        return
-    if data == "news_menu":
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📅 Forex Factory Today", callback_data="ff_today")], [InlineKeyboardButton("📌 Format Manual", callback_data="news_help")], [InlineKeyboardButton("🏠 Menu", callback_data="home")]])
-        await q.edit_message_text("📰 <b>News Desk</b>", reply_markup=kb, parse_mode="HTML")
-        return
-    if data == "ff_today":
-        if not can_use_news(uid):
-            await q.edit_message_text("🔒 Trial news habis. Upgrade premium.", parse_mode="HTML")
-            return
-        events = parse_forex_factory_today()
-        add_usage(uid, "news")
-        text = "📰 <b>FOREX FACTORY TODAY</b>\n\n"
-        if events:
-            for i, ev in enumerate(events, 1):
-                text += f"<b>{i}. USD {ev['impact']}</b>\n{ev['raw']}\n\n"
-        else:
-            text += "Tidak ada high impact USD terbaca / website sedang block. Pakai manual /news."
-        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
-        return
-    if data == "news_help":
-        await q.edit_message_text("Format:\n<code>/news cpi actual=3.2 forecast=3.4 previous=3.5</code>\n<code>/news nfp actual=250 forecast=180</code>\n<code>/fomc hawkish</code>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
-        return
-    if data == "account":
-        u = get_user(uid)
-        status = "💎 PREMIUM" if u.get("premium") else "🆓 TRIAL"
-        await q.edit_message_text(f"👤 <b>AKUN</b>\n\nID: <code>{uid}</code>\nStatus: <b>{status}</b>\nMarket used: <b>{u.get('market_used',0)}</b>\nNews used: <b>{u.get('news_used',0)}</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
-        return
-    if data == "upgrade":
-        await q.edit_message_text(upgrade_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Saya Sudah Bayar", callback_data="pay_menu")], [InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
-        return
-    if data == "pay_menu":
+        text, kb = main_menu(user_id)
+        await q.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    elif data == "pairs":
+        keys = list(PAIRS.keys())
+        rows = []
+        for i in range(0, len(keys), 2):
+            rows.append([InlineKeyboardButton(PAIRS[k]["name"], callback_data=f"pair_{k}") for k in keys[i:i+2]])
+        rows.append([InlineKeyboardButton("⬅️ Home", callback_data="home")])
+        await q.edit_message_text("Pilih pair:", reply_markup=InlineKeyboardMarkup(rows))
+    elif data.startswith("pair_"):
+        p = data.replace("pair_", "")
+        if p in PAIRS:
+            user["pair"] = p
+            save_user(user_id, user)
+        text, kb = main_menu(user_id)
+        await q.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    elif data == "tfs":
+        rows = [
+            [InlineKeyboardButton("M1", callback_data="tf_M1"), InlineKeyboardButton("M5", callback_data="tf_M5"), InlineKeyboardButton("M15", callback_data="tf_M15")],
+            [InlineKeyboardButton("M30", callback_data="tf_M30"), InlineKeyboardButton("H1", callback_data="tf_H1"), InlineKeyboardButton("H4", callback_data="tf_H4")],
+            [InlineKeyboardButton("⬅️ Home", callback_data="home")]
+        ]
+        await q.edit_message_text("Pilih timeframe:", reply_markup=InlineKeyboardMarkup(rows))
+    elif data.startswith("tf_"):
+        tf = data.replace("tf_", "")
+        if tf in TIMEFRAMES:
+            user["tf"] = tf
+            save_user(user_id, user)
+        text, kb = main_menu(user_id)
+        await q.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    elif data == "analyze":
+        pair, tf = user.get("pair", "XAUUSD"), user.get("tf", "M5")
+        await q.edit_message_text("📡 Ambil data realtime...")
+        result = build_analysis(pair, tf)
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💎 Elite 60 Hari", callback_data="payplan_60")],
-            [InlineKeyboardButton("👑 VIP 90 Hari", callback_data="payplan_90")],
-            [InlineKeyboardButton("♾️ Lifetime", callback_data="payplan_9999")],
-            [InlineKeyboardButton("🏠 Menu", callback_data="home")],
+            [InlineKeyboardButton("🔄 Refresh", callback_data="analyze")],
+            [InlineKeyboardButton("💱 Pair", callback_data="pairs"), InlineKeyboardButton("⏱ TF", callback_data="tfs")],
+            [InlineKeyboardButton("🏠 Home", callback_data="home")]
         ])
-        await q.edit_message_text(payment_start_text(), reply_markup=kb, parse_mode="HTML")
-        return
-    if data.startswith("payplan_"):
-        days = int(data.replace("payplan_", ""))
-        set_awaiting_payment(uid, days)
-        await q.edit_message_text(payment_waiting_text(days), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
-        return
-    if data.startswith("payapprove_"):
-        if uid != ADMIN_ID:
-            await q.answer("Khusus admin.", show_alert=True)
-            return
-        parts = data.split("_")
-        target_id = parts[1]
-        days = int(parts[2])
-        approve_payment_user(target_id, days)
-        mark_payment_status(target_id, "APPROVED")
-        await q.edit_message_text(f"✅ <b>PAYMENT APPROVED</b>\n\nUser <code>{target_id}</code> sudah aktif premium {format_days(days)}.", parse_mode="HTML")
-        try:
-            await context.bot.send_message(chat_id=int(target_id), text=f"✅ <b>PEMBAYARAN DISETUJUI</b>\n\nAkun lu sudah aktif: <b>{format_days(days)}</b>.\nKlik /start buat akses fitur premium.", parse_mode="HTML")
-        except Exception:
-            pass
-        return
-    if data.startswith("payreject_"):
-        if uid != ADMIN_ID:
-            await q.answer("Khusus admin.", show_alert=True)
-            return
-        target_id = data.replace("payreject_", "")
-        clear_awaiting_payment(target_id)
-        mark_payment_status(target_id, "REJECTED")
-        await q.edit_message_text(f"❌ <b>PAYMENT REJECTED</b>\n\nUser <code>{target_id}</code> ditolak.", parse_mode="HTML")
-        try:
-            await context.bot.send_message(chat_id=int(target_id), text="❌ <b>BUKTI BAYAR DITOLAK</b>\n\nBukti belum valid / belum terbaca. Kirim ulang bukti transfer yang jelas atau chat admin.", parse_mode="HTML")
-        except Exception:
-            pass
-        return
-
-
-def upgrade_text():
-    return f"""
-👑 <b>CAPITAL ELITE PROJECT V9</b>
-<code>Trading Intelligence System</code>
-
-💎 <b>ELITE ACCESS — 60 HARI</b>
-<s>Rp 499.000</s> 🔥 <b>Rp 199.000</b>
-
-👑 <b>VIP ACCESS — 90 HARI</b>
-<b>Rp 399.000</b>
-
-♾️ <b>LIFETIME ACCESS</b>
-<b>Rp 599.000</b>
-
-✅ Unlimited Signal
-✅ Auto Sniper Alert
-✅ Multi Pair Scanner
-✅ Session Bias
-✅ News AI Pro
-✅ Journal & Winrate
-✅ AI Vision Lite
-
-💳 <b>Payment</b>
-<code>{PAYMENT_TEXT}</code>
-
-📩 Admin: {ADMIN_CONTACT}
-Kirim bukti transfer setelah bayar.
-"""
-
-
-def format_days(days):
-    try:
-        days = int(days)
-    except Exception:
-        days = 60
-    return "LIFETIME" if days >= 9999 else f"{days} hari"
-
-
-def payment_start_text():
-    return f"""
-✅ <b>KONFIRMASI PEMBAYARAN</b>
-
-Pilih paket yang lu bayar.
-
-💳 <b>Payment</b>
-<code>{PAYMENT_TEXT}</code>
-
-Setelah pilih paket, kirim foto/screenshot bukti transfer ke bot ini.
-Bukti akan masuk ke admin untuk approve.
-"""
-
-
-def payment_waiting_text(days):
-    return f"""
-📸 <b>UPLOAD BUKTI TRANSFER</b>
-
-Paket dipilih: <b>{format_days(days)}</b>
-
-Sekarang kirim foto/screenshot bukti transfer ke chat ini.
-Setelah dikirim, admin tinggal klik approve/reject.
-
-⚠️ Pastikan nominal, tanggal, dan status berhasil terlihat jelas.
-"""
-
-
-def set_awaiting_payment(user_id, days):
-    u = get_user(user_id)
-    u["awaiting_payment_proof"] = True
-    u["pending_payment_days"] = int(days)
-    u["pending_payment_at"] = wib_now().strftime("%Y-%m-%d %H:%M:%S")
-    update_user(user_id, u)
-
-
-def clear_awaiting_payment(user_id):
-    u = get_user(int(user_id))
-    u["awaiting_payment_proof"] = False
-    u.pop("pending_payment_days", None)
-    update_user(int(user_id), u)
-
-
-def save_payment_request(user_id, days, file_id, username="", full_name=""):
-    db = load_json(PAYMENT_REQUEST_FILE, [])
-    item = {
-        "user_id": str(user_id),
-        "days": int(days),
-        "file_id": file_id,
-        "username": username or "-",
-        "full_name": full_name or "-",
-        "status": "WAITING_ADMIN",
-        "created_at": wib_now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
-    db.append(item)
-    db = db[-200:]
-    save_json(PAYMENT_REQUEST_FILE, db)
-    return item
-
-
-def mark_payment_status(user_id, status):
-    db = load_json(PAYMENT_REQUEST_FILE, [])
-    for item in reversed(db):
-        if str(item.get("user_id")) == str(user_id) and item.get("status") == "WAITING_ADMIN":
-            item["status"] = status
-            item["updated_at"] = wib_now().strftime("%Y-%m-%d %H:%M:%S")
-            break
-    save_json(PAYMENT_REQUEST_FILE, db)
-
-
-def approve_payment_user(user_id, days):
-    users = load_json(USER_FILE, {})
-    uid = str(user_id)
-    u = users.get(uid, {"market_used": 0, "news_used": 0, "created_at": wib_now().strftime("%Y-%m-%d %H:%M:%S")})
-    u["premium"] = True
-    u["premium_until"] = "LIFETIME" if int(days) >= 9999 else (wib_now() + timedelta(days=int(days))).strftime("%Y-%m-%d %H:%M:%S")
-    u["awaiting_payment_proof"] = False
-    u.pop("pending_payment_days", None)
-    u["approved_at"] = wib_now().strftime("%Y-%m-%d %H:%M:%S")
-    users[uid] = u
-    save_json(USER_FILE, users)
-
-# ==============================
-# COMMANDS
-# ==============================
-def normalize_tf(args, default="M5"):
-    if not args:
-        return default
-    raw = args[0].upper()
-    return {"1M":"M1","M1":"M1","3M":"M3","M3":"M3","5M":"M5","M5":"M5","15M":"M15","M15":"M15","30M":"M30","M30":"M30","1H":"H1","H1":"H1","4H":"H4","H4":"H4","D1":"DAILY","DAILY":"DAILY"}.get(raw, default)
-
-
-async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE, pair):
-    uid = update.effective_user.id
-    if not can_use_market(uid):
-        await update.message.reply_text("🔒 Trial market habis. Upgrade premium untuk akses unlimited.", parse_mode="HTML")
-        return
-    tf = normalize_tf(context.args)
-    await update.message.reply_text(f"🔍 Scanning <b>{PAIRS[pair]['name']}</b> {tf}...", parse_mode="HTML")
-    text = analyze_pair(pair, tf)
-    add_usage(uid, "market")
-    await update.message.reply_text(text, parse_mode="HTML")
-
-
-async def xau_command(update, context): await pair_command(update, context, "XAUUSD")
-async def xag_command(update, context): await pair_command(update, context, "XAGUSD")
-async def btc_command(update, context): await pair_command(update, context, "BTCUSD")
-async def eth_command(update, context): await pair_command(update, context, "ETHUSD")
-async def eur_command(update, context): await pair_command(update, context, "EURUSD")
-async def gbp_command(update, context): await pair_command(update, context, "GBPUSD")
-async def nas_command(update, context): await pair_command(update, context, "NAS100")
-async def us30_command(update, context): await pair_command(update, context, "US30")
-async def oil_command(update, context): await pair_command(update, context, "USOIL")
-
-
-async def sniper_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    if not can_use_market(uid):
-        await update.message.reply_text("🔒 Trial market habis. Upgrade premium.")
-        return
-    pairs = [a.upper() for a in context.args] if context.args else ["XAUUSD", "BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "NAS100", "US30", "USOIL"]
-    pairs = [p if p in PAIRS else {"XAU":"XAUUSD","BTC":"BTCUSD","ETH":"ETHUSD","GOLD":"XAUUSD","NAS":"NAS100"}.get(p, "XAUUSD") for p in pairs]
-    await update.message.reply_text("🎯 Sniper scanning...")
-    text = sniper_scan_text(pairs[:10])
-    add_usage(uid, "market")
-    await update.message.reply_text(text, parse_mode="HTML")
-
-
-def sniper_scan_text(pairs):
-    rows = []
-    best = None
-    for pair in pairs:
-        try:
-            r = analyze_pair(pair, "M15", compact=True)
-            if isinstance(r, dict):
-                rows.append(r)
-                if r["signal"] != "NO SETUP" and (best is None or r["confidence"] > best["confidence"]):
-                    best = r
-            pytime.sleep(0.4)
-        except Exception as e:
-            print("sniper error", pair, e)
-    text = "🎯 <b>CAPITAL ELITE SNIPER SCANNER</b>\n<code>Multi Pair Confluence</code>\n\n"
-    for r in rows:
-        icon = "🟢" if r["signal"] == "BUY" else "🔴" if r["signal"] == "SELL" else "⚪"
-        text += f"{icon} <b>{r['name']}</b> — {r['signal']} • {r['confidence']}% • {r['grade']} • SMC {r['smc']['Total']}/100\n"
-    if best:
-        text += f"\n🔥 <b>Best Watchlist</b>\n{best['name']} — <b>{best['signal']}</b> {best['confidence']}%\nEntry: <code>{fmt(best['entry'][0])} - {fmt(best['entry'][1])}</code>\nSL: <code>{fmt(best['sl'])}</code>\nTP: <code>{fmt(best['tp2'])}</code>\n"
-    else:
-        text += "\n⚪ Belum ada A setup. Tunggu market kasih sweep + MSS.\n"
-    text += "\n⚠️ Bukan saran finansial."
-    return text
-
-
-def session_bias_text():
-    session_tag, _, note = session_info()
-    pairs = ["XAUUSD", "BTCUSD", "EURUSD", "GBPUSD", "NAS100", "US30", "USOIL"]
-    text = f"🌍 <b>{session_tag.upper()} BIAS</b>\n<code>{wib_now().strftime('%d-%m-%Y %H:%M WIB')}</code>\n\n"
-    for p in pairs:
-        try:
-            r = analyze_pair(p, "H1", compact=True)
-            sig = r["signal"] if isinstance(r, dict) else "WAIT"
-            conf = r["confidence"] if isinstance(r, dict) else 0
-            text += f"• <b>{PAIRS[p]['name']}</b>: {sig} • {conf}%\n"
-            pytime.sleep(0.3)
-        except Exception:
-            text += f"• <b>{PAIRS[p]['name']}</b>: DATA N/A\n"
-    text += f"\n📌 {note}\n⚠️ Bukan saran finansial."
-    return text
-
-
-async def session_command(update, context):
-    await update.message.reply_text(session_bias_text(), parse_mode="HTML")
-
-
-async def dashboard_command(update, context):
-    await update.message.reply_text(performance_text(), parse_mode="HTML")
-
-
-async def journal_command(update, context):
-    await update.message.reply_text(performance_text(), parse_mode="HTML")
-
-
-async def result_command(update, context):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("Command ini khusus admin.")
-        return
-    if len(context.args) < 2:
-        await update.message.reply_text("Format: /result TRADE_ID WIN|LOSS|BE")
-        return
-    ok = update_trade_result(context.args[0], context.args[1])
-    await update.message.reply_text("✅ Journal updated." if ok else "Trade ID tidak ditemukan.")
-
-
-async def risk_command(update, context):
-    if len(context.args) < 2:
-        await update.message.reply_text("Format: /risk 100000 2")
-        return
-    modal = clean_num(context.args[0])
-    risk_pct = clean_num(context.args[1])
-    if not modal or not risk_pct:
-        await update.message.reply_text("Format salah. Contoh: /risk 100000 2")
-        return
-    risk_money = modal * risk_pct / 100
-    daily_max = modal * min(risk_pct * 2, 10) / 100
-    await update.message.reply_text(f"""
-🛡️ <b>SMART RISK CALCULATOR</b>
-
-Modal: <code>Rp{modal:,.0f}</code>
-Risk/trade: <code>{risk_pct}%</code>
-Max loss/trade: <code>Rp{risk_money:,.0f}</code>
-Max loss harian: <code>Rp{daily_max:,.0f}</code>
-
-Rule akun kecil:
-• Max 2-3 trade/hari
-• Stop kalau 2x SL
-• Minimal RR 1:2
-• Jangan balas dendam market
-""", parse_mode="HTML")
-
-
-async def news_command(update, context):
-    uid = update.effective_user.id
-    if not can_use_news(uid):
-        await update.message.reply_text("🔒 Trial news habis. Upgrade premium.")
-        return
-    if len(context.args) < 2:
-        await update.message.reply_text("Format: /news cpi actual=3.2 forecast=3.4 previous=3.5")
-        return
-    news_type = context.args[0]
-    raw = " ".join(context.args[1:])
-    actual = re.search(r"actual=([^\s]+)", raw, re.I)
-    forecast = re.search(r"forecast=([^\s]+)", raw, re.I)
-    previous = re.search(r"previous=([^\s]+)", raw, re.I)
-    if not actual or not forecast:
-        await update.message.reply_text("Format salah. Contoh: /news nfp actual=250 forecast=180 previous=190")
-        return
-    add_usage(uid, "news")
-    await update.message.reply_text(news_ai(news_type, actual.group(1), forecast.group(1), previous.group(1) if previous else None), parse_mode="HTML")
-
-
-async def fomc_command(update, context):
-    uid = update.effective_user.id
-    if not can_use_news(uid):
-        await update.message.reply_text("🔒 Trial news habis. Upgrade premium.")
-        return
-    tone = " ".join(context.args).lower() if context.args else "neutral"
-    if any(x in tone for x in ["hawk", "naik", "higher", "ketat"]):
-        text = news_ai("fomc", "1", "0", "hawkish")
-        text += "\n🏦 Tone FOMC: <b>HAWKISH</b> → USD cenderung kuat."
-    elif any(x in tone for x in ["dov", "turun", "cut", "longgar"]):
-        text = news_ai("fomc", "0", "1", "dovish")
-        text += "\n🏦 Tone FOMC: <b>DOVISH</b> → USD cenderung lemah."
-    else:
-        text = "🏦 <b>FOMC IMPACT</b>\nTone belum jelas. Tunggu statement + press conference + close candle M5."
-    add_usage(uid, "news")
-    await update.message.reply_text(text, parse_mode="HTML")
-
-
-async def commands_command(update, context):
-    await update.message.reply_text("""
-👑 <b>CAPITAL ELITE COMMAND CENTER</b>
-
-📊 Analysis:
-<code>/xau m5</code> <code>/btc h1</code> <code>/eth m15</code>
-<code>/eur m15</code> <code>/gbp m15</code> <code>/nas m15</code>
-<code>/us30 m15</code> <code>/oil h1</code>
-
-🎯 Scanner:
-<code>/sniper</code>
-<code>/session</code>
-
-📈 Journal:
-<code>/dashboard</code>
-<code>/journal</code>
-Admin: <code>/result TRADE_ID WIN</code>
-
-🛡️ Risk:
-<code>/risk 100000 2</code>
-
-📰 News:
-<code>/news cpi actual=3.2 forecast=3.4</code>
-<code>/fomc hawkish</code>
-
-💳 Payment:
-<code>/bayar 60</code> lalu kirim bukti transfer
-Admin: <code>/payments</code>
-
-📸 AI Vision Lite:
-Kirim screenshot chart ke bot.
-""", parse_mode="HTML")
-
-
-async def premium_command(update, context):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("Lu bukan admin.")
-        return
-    if len(context.args) < 1:
-        await update.message.reply_text("Format: /premium ID 60")
-        return
-    target = context.args[0]
-    days = int(context.args[1]) if len(context.args) > 1 and context.args[1].isdigit() else 60
-    users = load_json(USER_FILE, {})
-    u = users.get(target, {"market_used": 0, "news_used": 0, "created_at": wib_now().strftime("%Y-%m-%d %H:%M:%S")})
-    u["premium"] = True
-    u["premium_until"] = "LIFETIME" if days >= 9999 else (wib_now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-    users[target] = u
-    save_json(USER_FILE, users)
-    await update.message.reply_text(f"✅ User {target} premium {days} hari.")
-
-
-async def unpremium_command(update, context):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("Lu bukan admin.")
-        return
-    if not context.args:
-        await update.message.reply_text("Format: /unpremium ID")
-        return
-    users = load_json(USER_FILE, {})
-    if context.args[0] in users:
-        users[context.args[0]]["premium"] = False
-        save_json(USER_FILE, users)
-    await update.message.reply_text("✅ Premium dicabut.")
-
-
-async def stats_admin_command(update, context):
-    if update.effective_user.id != ADMIN_ID:
-        await dashboard_command(update, context)
-        return
-    users = load_json(USER_FILE, {})
-    premium = sum(1 for uid in users if get_user(int(uid)).get("premium"))
-    await update.message.reply_text(f"👑 <b>ADMIN STATS</b>\n\nTotal User: <b>{len(users)}</b>\nPremium: <b>{premium}</b>\n\n" + performance_text(), parse_mode="HTML")
-
-
-async def broadcast_command(update, context):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("Lu bukan admin.")
-        return
-    msg = " ".join(context.args)
-    if not msg:
-        await update.message.reply_text("Format: /broadcast pesan")
-        return
-    sent = 0
-    for uid in premium_user_ids():
-        try:
-            await context.bot.send_message(chat_id=int(uid), text=msg, parse_mode="HTML")
-            sent += 1
-        except Exception:
-            pass
-    await update.message.reply_text(f"Broadcast terkirim ke {sent} premium user.")
-
-
-async def vision_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    u = get_user(uid)
-
-    # Payment proof mode: user already clicked /bayar or payment button.
-    if u.get("awaiting_payment_proof"):
-        days = int(u.get("pending_payment_days", 60))
-        photo = update.message.photo[-1]
-        file_id = photo.file_id
-        username = update.effective_user.username or "-"
-        full_name = update.effective_user.full_name or "-"
-        save_payment_request(uid, days, file_id, username, full_name)
-        clear_awaiting_payment(uid)
-
-        await update.message.reply_text(
-            "✅ <b>BUKTI BAYAR TERKIRIM</b>\n\nTunggu admin approve. Kalau valid, premium aktif otomatis.",
+        await q.edit_message_text(result, reply_markup=kb, parse_mode="HTML")
+
+    elif data == "stock_menu":
+        rows = [
+            [InlineKeyboardButton("BBCA.JK", callback_data="stock_BBCA.JK"), InlineKeyboardButton("BBRI.JK", callback_data="stock_BBRI.JK")],
+            [InlineKeyboardButton("BMRI.JK", callback_data="stock_BMRI.JK"), InlineKeyboardButton("ANTM.JK", callback_data="stock_ANTM.JK")],
+            [InlineKeyboardButton("NVDA", callback_data="stock_NVDA"), InlineKeyboardButton("TSLA", callback_data="stock_TSLA")],
+            [InlineKeyboardButton("AAPL", callback_data="stock_AAPL"), InlineKeyboardButton("PLTR", callback_data="stock_PLTR")],
+            [InlineKeyboardButton("⬅️ Home", callback_data="home")]
+        ]
+        await q.edit_message_text(
+            "📈 <b>Pilih Saham</b>\n\nAtau pakai command:\n<code>/stock BBCA.JK</code>\n<code>/stock TSLA</code>",
+            reply_markup=InlineKeyboardMarkup(rows),
             parse_mode="HTML"
         )
 
-        admin_text = f"""
-💳 <b>PAYMENT PROOF REQUEST</b>
-
-User: <b>{full_name}</b>
-Username: @{username}
-ID: <code>{uid}</code>
-Paket: <b>{format_days(days)}</b>
-Waktu: <code>{wib_now().strftime('%d-%m-%Y %H:%M WIB')}</code>
-
-Klik approve kalau pembayaran valid.
-"""
+    elif data.startswith("stock_"):
+        symbol = data.replace("stock_", "")
+        await q.edit_message_text("📡 Analisa saham...\nTunggu sebentar.")
+        result = analyze_stock(symbol)
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ APPROVE", callback_data=f"payapprove_{uid}_{days}")],
-            [InlineKeyboardButton("❌ REJECT", callback_data=f"payreject_{uid}")],
+            [InlineKeyboardButton("🔄 Scan Lagi", callback_data=f"stock_{symbol}")],
+            [InlineKeyboardButton("🚀 Scanner", callback_data="stock_scan")],
+            [InlineKeyboardButton("🏠 Home", callback_data="home")]
         ])
-        try:
-            await context.bot.send_photo(chat_id=ADMIN_ID, photo=file_id, caption=admin_text, reply_markup=kb, parse_mode="HTML")
-        except Exception:
-            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text, reply_markup=kb, parse_mode="HTML")
+        await q.edit_message_text(result, reply_markup=kb, parse_mode="HTML")
+
+    elif data == "stock_scan":
+        await q.edit_message_text("🚀 Scanning saham potensial...\nTunggu sebentar.")
+        result = scan_stocks()
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Refresh Scanner", callback_data="stock_scan")],
+            [InlineKeyboardButton("📈 Pilih Saham", callback_data="stock_menu")],
+            [InlineKeyboardButton("🏠 Home", callback_data="home")]
+        ])
+        await q.edit_message_text(result, reply_markup=kb, parse_mode="HTML")
+
+
+    elif data == "stock_top":
+        await q.edit_message_text("🚀 Scanning Top 10 saham...\nTunggu sebentar.")
+        result = top_stock_scanner(10)
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Refresh", callback_data="stock_top")],
+            [InlineKeyboardButton("📈 Pilih Saham", callback_data="stock_menu")],
+            [InlineKeyboardButton("🏠 Home", callback_data="home")]
+        ])
+        await q.edit_message_text(result, reply_markup=kb, parse_mode="HTML")
+
+    elif data == "stock_heatmap":
+        await q.edit_message_text("🔥 Membuat heatmap saham...\nTunggu sebentar.")
+        result = market_heatmap_text()
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Refresh", callback_data="stock_heatmap")],
+            [InlineKeyboardButton("🚀 Top 10", callback_data="stock_top")],
+            [InlineKeyboardButton("🏠 Home", callback_data="home")]
+        ])
+        await q.edit_message_text(result, reply_markup=kb, parse_mode="HTML")
+
+    elif data == "stock_watchlist":
+        result = watchlist_text(user_id)
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🚀 Top 10", callback_data="stock_top")],
+            [InlineKeyboardButton("🏠 Home", callback_data="home")]
+        ])
+        await q.edit_message_text(result, reply_markup=kb, parse_mode="HTML")
+
+    elif data == "vision_help":
+        await q.edit_message_text("🧠 Kirim screenshot chart sebagai foto + caption contoh: BTCUSD M5", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Home", callback_data="home")]]))
+
+def gemini_review(image_bytes, caption=""):
+    if not GEMINI_API_KEY:
+        return "⚠️ GEMINI_API_KEY belum diisi di Railway Variables."
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+    prompt = f"Lu trader senior. Review screenshot chart ini. Caption: {caption}. Jawab BUY/SELL/NO TRADE, Entry, SL, TP, Probability, Alasan singkat. Bahasa Indonesia. Jangan janji profit."
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    payload = {"contents": [{"parts": [{"inline_data": {"mime_type": "image/jpeg", "data": b64}}, {"text": prompt}]}], "generationConfig": {"temperature": 0.2, "maxOutputTokens": 800}}
+    try:
+        r = requests.post(url, json=payload, timeout=45)
+        data = r.json()
+        if r.status_code != 200:
+            return f"⚠️ Gemini error: {data.get('error', {}).get('message', str(data))[:400]}"
+        return "".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"]).strip()
+    except Exception as e:
+        return f"⚠️ Gemini gagal: {type(e).__name__}: {str(e)[:200]}"
+
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🧠 AI Vision membaca chart...")
+    photo = update.message.photo[-1]
+    tg_file = await context.bot.get_file(photo.file_id)
+    img = await tg_file.download_as_bytearray()
+    result = gemini_review(bytes(img), update.message.caption or "")
+    await update.message.reply_text(result + "\n\n⚠️ Not Financial Advice.", parse_mode="HTML")
+
+async def analyze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = get_user(update.effective_user.id)
+    await update.message.reply_text("📡 Ambil data realtime...")
+    await update.message.reply_text(build_analysis(user.get("pair", "XAUUSD"), user.get("tf", "M5")), parse_mode="HTML")
+
+async def pair_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Contoh: /pair XAUUSD")
         return
-
-    # Default: AI Vision Lite.
-    if not can_use_market(uid):
-        await update.message.reply_text("🔒 Trial market habis. Upgrade premium untuk AI Vision.")
+    p = context.args[0].upper()
+    if p not in PAIRS:
+        await update.message.reply_text("Pair tidak tersedia.")
         return
-    caption = update.message.caption or ""
-    pair = "XAUUSD"
-    for p in PAIRS:
-        if p.lower() in caption.lower() or PAIRS[p]["name"].replace("/", "").lower() in caption.lower():
-            pair = p
-            break
-    tf = "M5"
-    for t in TIMEFRAMES:
-        if t.lower() in caption.lower():
-            tf = t
-            break
-    add_usage(uid, "market")
-    text = analyze_pair(pair, tf)
-    text = "📸 <b>AI VISION LITE</b>\n<code>Screenshot diterima. Bot pakai market engine + caption pair/TF.</code>\n\n" + text
-    await update.message.reply_text(text, parse_mode="HTML")
+    user = get_user(update.effective_user.id)
+    user["pair"] = p
+    save_user(update.effective_user.id, user)
+    await update.message.reply_text(f"Pair aktif: {PAIRS[p]['name']}")
 
-
-async def bayar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    days = 60
-    if context.args:
-        raw = context.args[0].lower()
-        if raw in ["90", "vip"]:
-            days = 90
-        elif raw in ["life", "lifetime", "9999"]:
-            days = 9999
-        elif raw.isdigit():
-            days = int(raw)
-    set_awaiting_payment(uid, days)
-    await update.message.reply_text(payment_waiting_text(days), parse_mode="HTML")
-
-
-async def payments_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("Lu bukan admin.")
+async def tf_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Contoh: /tf M5")
         return
-    db = load_json(PAYMENT_REQUEST_FILE, [])
-    waiting = [x for x in db if x.get("status") == "WAITING_ADMIN"][-10:]
-    if not waiting:
-        await update.message.reply_text("✅ Tidak ada payment pending.")
+    tf = context.args[0].upper()
+    if tf not in TIMEFRAMES:
+        await update.message.reply_text("TF tidak tersedia.")
         return
-    text = "💳 <b>PENDING PAYMENT</b>\n\n"
-    for i, item in enumerate(waiting, 1):
-        text += f"{i}. ID <code>{item.get('user_id')}</code> • {format_days(item.get('days',60))} • @{item.get('username','-')} • {item.get('created_at','-')}\n"
-    await update.message.reply_text(text, parse_mode="HTML")
+    user = get_user(update.effective_user.id)
+    user["tf"] = tf
+    save_user(update.effective_user.id, user)
+    await update.message.reply_text(f"TF aktif: {tf}")
 
-# ==============================
-# AUTO JOBS
-# ==============================
-async def auto_sniper_alert(context: ContextTypes.DEFAULT_TYPE):
-    targets = premium_user_ids()
-    if not targets:
+
+async def stock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Contoh:\n<code>/stock BBCA.JK</code>\n<code>/stock TSLA</code>", parse_mode="HTML")
         return
-    watch = ["XAUUSD", "BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "NAS100", "US30", "USOIL"]
-    sent_db = load_json(ALERT_SENT_FILE, {})
-    hour_key = wib_now().strftime("%Y-%m-%d %H")
-    sent_db.setdefault(hour_key, [])
-    for p in watch:
-        try:
-            r = analyze_pair(p, "M15", compact=True)
-            if not isinstance(r, dict) or r["signal"] == "NO SETUP" or r["confidence"] < AUTO_ALERT_MIN_CONF:
-                continue
-            alert_key = f"{hour_key}_{p}_{r['signal']}"
-            if alert_key in sent_db[hour_key]:
-                continue
-            sent_db[hour_key].append(alert_key)
-            text = f"""
-🚨 <b>CAPITAL ELITE AUTO SNIPER ALERT</b>
-<code>{PAIRS[p]['name']} • M15</code>
-
-Signal: <b>{r['signal']}</b>
-Confidence: <b>{r['confidence']}%</b> {conf_bar(r['confidence'])}
-Grade: <b>{r['grade']}</b>
-SMC Score: <b>{r['smc']['Total']}/100</b>
-
-Entry: <code>{fmt(r['entry'][0])} - {fmt(r['entry'][1])}</code>
-SL: <code>{fmt(r['sl'])}</code>
-TP1: <code>{fmt(r['tp1'])}</code>
-TP2: <code>{fmt(r['tp2'])}</code>
-
-⚠️ Validasi candle close. Bukan saran finansial.
-"""
-            for uid in targets:
-                try:
-                    await context.bot.send_message(chat_id=int(uid), text=text, parse_mode="HTML")
-                except Exception:
-                    pass
-            pytime.sleep(0.5)
-        except Exception as e:
-            print("auto sniper error", p, e)
-    days = sorted(sent_db.keys())[-48:]
-    save_json(ALERT_SENT_FILE, {d: sent_db[d] for d in days})
+    symbol = context.args[0].upper()
+    await update.message.reply_text("📡 Analisa saham...\nTunggu sebentar.")
+    await update.message.reply_text(analyze_stock(symbol), parse_mode="HTML")
 
 
-async def daily_watchlist(context):
-    targets = premium_user_ids()
-    if not targets:
+async def stocks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🚀 Scanning saham potensial...\nTunggu sebentar.")
+    await update.message.reply_text(scan_stocks(), parse_mode="HTML")
+
+
+
+async def stocktop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🚀 Scanning Top 10 saham...\nTunggu sebentar.")
+    await update.message.reply_text(top_stock_scanner(10), parse_mode="HTML")
+
+
+async def heatmap_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔥 Membuat heatmap saham...\nTunggu sebentar.")
+    await update.message.reply_text(market_heatmap_text(), parse_mode="HTML")
+
+
+async def stocknews_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Contoh: /stocknews NVDA atau /stocknews BBCA.JK")
         return
-    text = "🔥 <b>TODAY WATCHLIST</b>\n<code>Capital Elite Project V9</code>\n\n" + sniper_scan_text(["XAUUSD", "BTCUSD", "EURUSD", "GBPUSD", "NAS100", "USOIL"])
-    for uid in targets:
-        try:
-            await context.bot.send_message(chat_id=int(uid), text=text, parse_mode="HTML")
-        except Exception:
-            pass
+    symbol = context.args[0].upper()
+    await update.message.reply_text("📰 Ambil stock news AI...\nTunggu sebentar.")
+    await update.message.reply_text(stock_news_ai_basic(symbol), parse_mode="HTML")
 
 
-async def session_broadcast(context):
-    targets = premium_user_ids()
-    if not targets:
+async def watchlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(watchlist_text(update.effective_user.id), parse_mode="HTML")
+
+
+async def watchadd_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Contoh: /watchadd BBCA.JK")
         return
-    text = session_bias_text()
-    for uid in targets:
-        try:
-            await context.bot.send_message(chat_id=int(uid), text=text, parse_mode="HTML")
-        except Exception:
-            pass
+    symbol = normalize_stock_symbol(context.args[0])
+    items = get_user_stock_watchlist(update.effective_user.id)
+    if symbol not in items:
+        items.append(symbol)
+    save_user_stock_watchlist(update.effective_user.id, items)
+    await update.message.reply_text(f"✅ <b>{symbol}</b> ditambahkan ke watchlist.", parse_mode="HTML")
 
 
-async def auto_news_alert(context):
-    targets = premium_user_ids()
-    if not targets:
+async def watchdel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Contoh: /watchdel BBCA.JK")
         return
-    events = parse_forex_factory_today()
-    if not events:
-        return
-    sent = load_json(NEWS_SENT_FILE, {})
-    day = wib_now().strftime("%Y-%m-%d")
-    sent.setdefault(day, [])
-    fresh = []
-    for ev in events:
-        key = re.sub(r"\s+", " ", ev["raw"].lower())[:160]
-        if key not in sent[day]:
-            fresh.append(ev)
-            sent[day].append(key)
-    if not fresh:
-        return
-    text = "🚨 <b>HIGH IMPACT NEWS WATCH</b>\n\n"
-    for ev in fresh[:5]:
-        text += f"• USD {ev['impact']} — {ev['raw']}\n"
-    text += "\nGunakan /news setelah actual keluar."
-    for uid in targets:
-        try:
-            await context.bot.send_message(chat_id=int(uid), text=text, parse_mode="HTML")
-        except Exception:
-            pass
-    days = sorted(sent.keys())[-7:]
-    save_json(NEWS_SENT_FILE, {d: sent[d] for d in days})
-
-# ==============================
-# RUN APP
-# ==============================
-def main():
-    if not TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN belum diisi di Environment Variables.")
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("commands", commands_command))
-    app.add_handler(CommandHandler("xau", xau_command))
-    app.add_handler(CommandHandler("xag", xag_command))
-    app.add_handler(CommandHandler("btc", btc_command))
-    app.add_handler(CommandHandler("eth", eth_command))
-    app.add_handler(CommandHandler("eur", eur_command))
-    app.add_handler(CommandHandler("gbp", gbp_command))
-    app.add_handler(CommandHandler("nas", nas_command))
-    app.add_handler(CommandHandler("us30", us30_command))
-    app.add_handler(CommandHandler("oil", oil_command))
-    app.add_handler(CommandHandler("sniper", sniper_command))
-    app.add_handler(CommandHandler("session", session_command))
-    app.add_handler(CommandHandler("dashboard", dashboard_command))
-    app.add_handler(CommandHandler("journal", journal_command))
-    app.add_handler(CommandHandler("result", result_command))
-    app.add_handler(CommandHandler("risk", risk_command))
-    app.add_handler(CommandHandler("news", news_command))
-    app.add_handler(CommandHandler("fomc", fomc_command))
-    app.add_handler(CommandHandler("premium", premium_command))
-    app.add_handler(CommandHandler("bayar", bayar_command))
-    app.add_handler(CommandHandler("payments", payments_command))
-    app.add_handler(CommandHandler("unpremium", unpremium_command))
-    app.add_handler(CommandHandler("stats", stats_admin_command))
-    app.add_handler(CommandHandler("broadcast", broadcast_command))
-    app.add_handler(MessageHandler(filters.PHOTO, vision_handler))
-    app.add_handler(CallbackQueryHandler(button))
-
-    # Auto jobs. Waktu pakai UTC. WIB = UTC+7.
-    app.job_queue.run_repeating(auto_sniper_alert, interval=1800, first=120)  # tiap 30 menit
-    app.job_queue.run_repeating(auto_news_alert, interval=1800, first=180)
-    app.job_queue.run_daily(daily_watchlist, time=dt_time(hour=0, minute=0))   # 07:00 WIB
-    app.job_queue.run_daily(session_broadcast, time=dt_time(hour=6, minute=0)) # 13:00 WIB
-    app.job_queue.run_daily(session_broadcast, time=dt_time(hour=12, minute=0)) # 19:00 WIB
-
-    print("CAPITAL ELITE PROJECT V9 PREMIUM ONLINE...")
-    app.run_polling()
+    symbol = normalize_stock_symbol(context.args[0])
+    items = [s for s in get_user_stock_watchlist(update.effective_user.id) if s != symbol]
+    save_user_stock_watchlist(update.effective_user.id, items)
+    await update.message.reply_text(f"✅ <b>{symbol}</b> dihapus dari watchlist.", parse_mode="HTML")
 
 
-if __name__ == "__main__":
-    main()
+app = ApplicationBuilder().token(TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("analyze", analyze_cmd))
+app.add_handler(CommandHandler("pair", pair_cmd))
+app.add_handler(CommandHandler("tf", tf_cmd))
+app.add_handler(CommandHandler("stock", stock_cmd))
+app.add_handler(CommandHandler("stocks", stocks_cmd))
+app.add_handler(CommandHandler("stocktop", stocktop_cmd))
+app.add_handler(CommandHandler("heatmap", heatmap_cmd))
+app.add_handler(CommandHandler("stocknews", stocknews_cmd))
+app.add_handler(CommandHandler("watchlist", watchlist_cmd))
+app.add_handler(CommandHandler("watchadd", watchadd_cmd))
+app.add_handler(CommandHandler("watchdel", watchdel_cmd))
+app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+app.add_handler(CallbackQueryHandler(button))
+
+# Watchlist breakout alert every 1 hour
+app.job_queue.run_repeating(
+    stock_watch_alert_job,
+    interval=3600,
+    first=300
+)
+
+print("CAPITAL ELITE PROJECT NEW BOT ONLINE...")
+app.run_polling()
