@@ -623,6 +623,312 @@ async def tf_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"TF aktif: {tf}")
 
 
+
+# ==============================
+# STOCK ENGINE - FULL READY
+# ==============================
+def normalize_stock_symbol(symbol):
+    s = str(symbol).upper().strip()
+    if s in IDX_SHORT:
+        return s + ".JK"
+    return s
+
+
+def stock_price_fmt(symbol, price):
+    try:
+        price = float(price)
+        if str(symbol).upper().endswith(".JK"):
+            return f"{price:,.0f}"
+        return f"{price:,.2f}"
+    except Exception:
+        return str(price)
+
+
+def fetch_stock_df(symbol):
+    symbol = normalize_stock_symbol(symbol)
+    df = yf.download(symbol, period="6mo", interval="1d", progress=False, auto_adjust=True)
+    if df is None or df.empty or len(df) < 60:
+        return symbol, None
+    if hasattr(df.columns, "levels"):
+        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+    return symbol, df
+
+
+def stock_quick_score(symbol):
+    symbol, df = fetch_stock_df(symbol)
+    if df is None:
+        return None
+    close, high, low, vol = df["Close"], df["High"], df["Low"], df["Volume"]
+    last = float(close.iloc[-1]); prev = float(close.iloc[-2])
+    ma20 = float(close.rolling(20).mean().iloc[-1]); ma50 = float(close.rolling(50).mean().iloc[-1])
+    res = float(high.tail(20).max()); sup = float(low.tail(20).min())
+    avg_vol = float(vol.tail(20).mean()); last_vol = float(vol.iloc[-1])
+    vol_ratio = last_vol / avg_vol if avg_vol else 1
+    change_pct = ((last - prev) / prev) * 100 if prev else 0
+    score = 35; tags = []
+    if last > ma20: score += 15; tags.append("MA20")
+    if ma20 > ma50: score += 20; tags.append("Trend")
+    if last >= res * 0.985: score += 15; tags.append("Near BO")
+    if last > res * 1.002: score += 20; tags.append("Breakout")
+    if vol_ratio >= 1.5: score += 15; tags.append("Vol Spike")
+    elif vol_ratio >= 1.1: score += 8; tags.append("Vol Up")
+    if change_pct > 1: score += 8; tags.append("Momentum")
+    elif change_pct < -2: score -= 10; tags.append("Weak")
+    score = max(20, min(score, 95))
+    return {"symbol": symbol, "price": last, "score": score, "change": change_pct, "volume": vol_ratio, "support": sup, "resistance": res, "ma20": ma20, "ma50": ma50, "tags": tags, "df": df}
+
+
+def analyze_stock(symbol):
+    symbol = normalize_stock_symbol(symbol)
+    q = stock_quick_score(symbol)
+    if not q:
+        return f"⚠️ Data saham <b>{symbol}</b> tidak cukup / tidak ditemukan."
+    df = q["df"]; high, low = df["High"], df["Low"]
+    last = q["price"]; ma20 = q["ma20"]; ma50 = q["ma50"]
+    support = q["support"]; resistance = q["resistance"]
+    score = q["score"]; change_pct = q["change"]; vol_ratio = q["volume"]
+    if score >= 85:
+        grade = "POTENSI TERBANG / STRONG WATCH"; signal = "🟢 BUY ON PULLBACK / BREAKOUT"
+    elif score >= 70:
+        grade = "WATCHLIST BAGUS"; signal = "🟡 WAIT PULLBACK"
+    elif score >= 55:
+        grade = "NETRAL"; signal = "⚪ WAIT"
+    else:
+        grade = "WEAK"; signal = "🔴 AVOID DULU"
+    atr_like = float((high - low).tail(14).mean())
+    if last >= resistance * 0.985:
+        entry_low = max(last - atr_like * 0.35, ma20); entry_high = last
+    else:
+        entry_low = ma20; entry_high = min(ma20 + atr_like * 0.45, last)
+    sl = min(support, entry_low - atr_like * 0.75)
+    risk = max(entry_high - sl, atr_like * 0.5)
+    tp1 = entry_high + risk * 1.5; tp2 = entry_high + risk * 2.5
+    name = STOCK_WATCHLIST.get(symbol, symbol)
+    reasons_text = " | ".join(q.get("tags", [])[:6]) if q.get("tags") else "Belum ada konfirmasi kuat"
+    return f"""
+📈 <b>CAPITAL ELITE STOCK ANALYSIS</b>
+
+🏢 Saham: <b>{symbol}</b>
+📝 Nama: <b>{name}</b>
+💵 Harga: <code>{stock_price_fmt(symbol, last)}</code>
+📊 Change: <b>{change_pct:.2f}%</b>
+
+🎯 Score: <b>{score}/100</b>
+🏆 Grade: <b>{grade}</b>
+📌 Signal: <b>{signal}</b>
+
+📈 Trend:
+MA20: <code>{stock_price_fmt(symbol, ma20)}</code>
+MA50: <code>{stock_price_fmt(symbol, ma50)}</code>
+
+🟢 Support: <code>{stock_price_fmt(symbol, support)}</code>
+🔴 Resistance: <code>{stock_price_fmt(symbol, resistance)}</code>
+📊 Volume: <b>{vol_ratio:.2f}x</b> rata-rata
+
+💰 Entry Area:
+<code>{stock_price_fmt(symbol, entry_low)} - {stock_price_fmt(symbol, entry_high)}</code>
+
+⛔ Stop Loss:
+<code>{stock_price_fmt(symbol, sl)}</code>
+
+🎯 TP1:
+<code>{stock_price_fmt(symbol, tp1)}</code>
+
+🎯 TP2:
+<code>{stock_price_fmt(symbol, tp2)}</code>
+
+🤖 Analisa:
+{reasons_text}
+
+⚠️ Bukan rekomendasi pasti naik. Gunakan risk management.
+"""
+
+
+def scan_stocks(limit=7):
+    results = []
+    for sym in STOCK_WATCHLIST.keys():
+        try:
+            q = stock_quick_score(sym)
+            if q: results.append(q)
+        except Exception: pass
+    results.sort(key=lambda x: (x["score"], x["volume"], x["change"]), reverse=True)
+    if not results:
+        return "⚠️ Scanner saham belum dapat data. Cek koneksi / yfinance."
+    lines=[]
+    for i,r in enumerate(results[:limit],1):
+        tag = "🚀" if r["score"] >= 85 else "🟡" if r["score"] >= 70 else "⚪"
+        lines.append(f"{i}. {tag} <b>{r['symbol']}</b> — Score <b>{r['score']}</b> | Change {r['change']:.2f}% | Vol {r['volume']:.2f}x")
+    return f"""
+🚀 <b>CAPITAL ELITE STOCK SCANNER</b>
+
+Saham dengan momentum paling kuat:
+
+{chr(10).join(lines)}
+
+Rule:
+Score 85+ = Watch serius
+Score 70+ = Tunggu pullback/breakout
+Score <70 = Jangan maksa
+
+⚠️ Bukan rekomendasi pasti naik. Tetap cek chart dan risk.
+"""
+
+
+def top_stock_scanner(limit=10):
+    return scan_stocks(limit)
+
+
+def market_heatmap_text():
+    idx = ["BBCA.JK", "BBRI.JK", "BMRI.JK", "TLKM.JK", "ANTM.JK", "MDKA.JK", "GOTO.JK", "ADRO.JK"]
+    us = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META", "PLTR"]
+    def line_for(symbols):
+        out=[]
+        for s in symbols:
+            try:
+                q=stock_quick_score(s)
+                if not q: continue
+                icon = "🟢" if q["score"] >= 80 else "🟡" if q["score"] >= 65 else "🔴"
+                out.append(f"{icon} <b>{q['symbol']}</b> {q['change']:.2f}%")
+            except Exception: pass
+        return "\n".join(out) if out else "Data belum tersedia."
+    return f"""
+🔥 <b>CAPITAL ELITE MARKET HEATMAP</b>
+
+🇮🇩 <b>IDX Watchlist</b>
+{line_for(idx)}
+
+🇺🇸 <b>US Watchlist</b>
+{line_for(us)}
+
+Legend:
+🟢 Momentum kuat
+🟡 Netral / tunggu konfirmasi
+🔴 Lemah
+
+⚠️ Heatmap hanya filter awal, tetap cek chart.
+"""
+
+
+def stock_news_ai_basic(symbol):
+    symbol=normalize_stock_symbol(symbol)
+    q=stock_quick_score(symbol)
+    if not q: return f"⚠️ Data saham <b>{symbol}</b> belum tersedia."
+    headlines=[]; sentiment_score=50
+    try:
+        ticker=yf.Ticker(symbol); news=ticker.news or []
+        for item in news[:5]:
+            title = item.get("title") or item.get("content", {}).get("title", "")
+            if not title: continue
+            headlines.append(title[:120]); t=title.lower()
+            if any(w in t for w in ["beat","surge","record","growth","upgrade","profit","strong","rally","breakout","buy"]): sentiment_score += 8
+            if any(w in t for w in ["miss","drop","fall","lawsuit","downgrade","loss","weak","sell","cut","risk"]): sentiment_score -= 8
+    except Exception: pass
+    final=int((sentiment_score*0.4)+(q["score"]*0.6)); final=max(0,min(final,100))
+    verdict="🟢 Bullish Bias" if final>=75 else "🟡 Netral Positif" if final>=55 else "🔴 Hati-hati"
+    headline_text="\n".join([f"• {h}" for h in headlines]) if headlines else "• Belum ada headline terbaru terbaca dari yfinance."
+    return f"""
+📰 <b>STOCK NEWS AI</b>
+
+🏢 Saham: <b>{symbol}</b>
+📊 Technical Score: <b>{q['score']}/100</b>
+🧠 News + Technical Verdict: <b>{final}/100</b>
+📌 Bias: <b>{verdict}</b>
+
+Headline:
+{headline_text}
+
+AI Note:
+Jika score teknikal kuat tapi news negatif, tunggu pullback dan konfirmasi volume.
+Jika score teknikal + news sama-sama kuat, saham layak masuk watchlist utama.
+
+⚠️ News dari yfinance bisa delay / terbatas.
+"""
+
+
+def get_user_stock_watchlist(user_id):
+    db=load_json(STOCK_USER_WATCHLIST_FILE,{})
+    return db.get(str(user_id), [])
+
+
+def save_user_stock_watchlist(user_id, items):
+    db=load_json(STOCK_USER_WATCHLIST_FILE,{})
+    clean=[]
+    for s in items:
+        sym=normalize_stock_symbol(s)
+        if sym not in clean: clean.append(sym)
+    db[str(user_id)]=clean[:30]
+    save_json(STOCK_USER_WATCHLIST_FILE, db)
+
+
+def watchlist_text(user_id):
+    items=get_user_stock_watchlist(user_id)
+    if not items:
+        return """
+⭐ <b>WATCHLIST SAHAM PRIBADI</b>
+
+Watchlist masih kosong.
+
+Tambah:
+<code>/watchadd BBCA.JK</code>
+<code>/watchadd NVDA</code>
+"""
+    lines=[]
+    for s in items:
+        try:
+            q=stock_quick_score(s)
+            if q:
+                icon="🚀" if q["score"]>=85 else "🟡" if q["score"]>=70 else "⚪"
+                lines.append(f"{icon} <b>{q['symbol']}</b> — Score {q['score']}/100 | {q['change']:.2f}% | Vol {q['volume']:.2f}x")
+            else: lines.append(f"⚪ <b>{s}</b> — data belum tersedia")
+        except Exception: lines.append(f"⚪ <b>{s}</b> — error")
+    return f"""
+⭐ <b>WATCHLIST SAHAM PRIBADI</b>
+
+{chr(10).join(lines)}
+
+Command:
+<code>/watchadd BBCA.JK</code>
+<code>/watchdel BBCA.JK</code>
+"""
+
+
+async def stock_watch_alert_job(context):
+    try:
+        db=load_json(STOCK_USER_WATCHLIST_FILE,{})
+        if not db: return
+        alert_db=load_json(STOCK_ALERT_FILE,{})
+        today=now_wib().strftime("%Y-%m-%d")
+        for uid, symbols in db.items():
+            for sym in symbols:
+                try:
+                    q=stock_quick_score(sym)
+                    if not q: continue
+                    near=q["price"] >= q["resistance"]*0.985
+                    strong=q["score"] >= 85
+                    if not near and not strong: continue
+                    key=f"{uid}_{q['symbol']}_{today}"
+                    if alert_db.get(key): continue
+                    alert_db[key]=True
+                    msg=f"""
+🚀 <b>STOCK WATCHLIST ALERT</b>
+
+Saham: <b>{q['symbol']}</b>
+Score: <b>{q['score']}/100</b>
+Harga: <code>{stock_price_fmt(q['symbol'], q['price'])}</code>
+Resistance: <code>{stock_price_fmt(q['symbol'], q['resistance'])}</code>
+Volume: <b>{q['volume']:.2f}x</b>
+
+Gunakan:
+<code>/stock {q['symbol']}</code>
+untuk detail Entry / SL / TP.
+"""
+                    try: await context.bot.send_message(chat_id=int(uid), text=msg, parse_mode="HTML")
+                    except Exception: pass
+                except Exception: pass
+        save_json(STOCK_ALERT_FILE, alert_db)
+    except Exception as e:
+        print("STOCK WATCH ALERT ERROR:", e)
+
 async def stock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Contoh:\n<code>/stock BBCA.JK</code>\n<code>/stock TSLA</code>", parse_mode="HTML")
