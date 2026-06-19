@@ -7,6 +7,7 @@
 # requests
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import Conflict
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 from tradingview_ta import TA_Handler
 from datetime import datetime, timedelta, time as dt_time
@@ -60,8 +61,8 @@ PAIRS = {
     "USDCAD": {"symbol": "USDCAD", "screener": "forex", "exchange": "FX_IDC", "name": "USD/CAD", "cat": "FOREX", "yf": "CAD=X", "sl": (0.0020, 0.0040), "tp": (0.0040, 0.0080)},
 
     # INDICES
-    "NAS100": {"symbol": "NAS100", "screener": "cfd", "exchange": "OANDA", "name": "NAS100", "cat": "INDEX", "yf": "NQ=F", "sl": (30, 90), "tp": (70, 180)},
-    "US30": {"symbol": "US30", "screener": "cfd", "exchange": "OANDA", "name": "US30", "cat": "INDEX", "yf": "YM=F", "sl": (60, 160), "tp": (140, 320)},
+    "NAS100": {"symbol": "NAS100USD", "screener": "cfd", "exchange": "OANDA", "name": "NAS100", "cat": "INDEX", "yf": "NQ=F", "sl": (30, 90), "tp": (70, 180)},
+    "US30": {"symbol": "US30USD", "screener": "cfd", "exchange": "OANDA", "name": "US30", "cat": "INDEX", "yf": "YM=F", "sl": (60, 160), "tp": (140, 320)},
     "SPX500": {"symbol": "SPX500USD", "screener": "cfd", "exchange": "OANDA", "name": "SPX500", "cat": "INDEX", "yf": "ES=F", "sl": (12, 35), "tp": (25, 75)},
 
     # CRYPTO
@@ -262,19 +263,64 @@ def build_tf_data(price, open_price, high, low, ema20, ema50, rsi, source):
 
 def fetch_tv(pair_key, tf):
     pair = PAIRS[pair_key]
-    handler = TA_Handler(symbol=pair["symbol"], screener=pair["screener"], exchange=pair["exchange"], interval=TIMEFRAMES.get(tf, "5m"))
-    data = handler.get_analysis()
-    ind = data.indicators
-    price = ind.get("close")
-    high = ind.get("high")
-    low = ind.get("low")
-    open_price = ind.get("open") or price
-    ema20 = ind.get("EMA20") or price
-    ema50 = ind.get("EMA50") or price
-    rsi = ind.get("RSI") or 50
-    if price is None or high is None or low is None:
-        raise Exception("TradingView data belum lengkap")
-    return build_tf_data(float(price), float(open_price), float(high), float(low), float(ema20), float(ema50), float(rsi), "TradingView")
+
+    tv_candidates = [
+        (pair["symbol"], pair["screener"], pair["exchange"])
+    ]
+
+    # Backup mapping agar NAS100 / US30 / OIL tidak sering error.
+    backup = {
+        "NAS100": [
+            ("NAS100USD", "cfd", "OANDA"),
+            ("NAS100", "cfd", "OANDA"),
+            ("US100", "cfd", "CAPITALCOM"),
+            ("NDX", "america", "NASDAQ"),
+        ],
+        "US30": [
+            ("US30USD", "cfd", "OANDA"),
+            ("US30", "cfd", "OANDA"),
+            ("DJI", "america", "DJ"),
+        ],
+        "USOIL": [
+            ("USOIL", "cfd", "TVC"),
+            ("USOIL", "cfd", "OANDA"),
+            ("CL1!", "futures", "NYMEX"),
+        ],
+        "UKOIL": [
+            ("UKOIL", "cfd", "TVC"),
+            ("UKOIL", "cfd", "OANDA"),
+            ("BRN1!", "futures", "ICEEUR"),
+        ],
+    }
+
+    tv_candidates += backup.get(pair_key, [])
+
+    last_error = None
+    for symbol, screener, exchange in tv_candidates:
+        try:
+            handler = TA_Handler(
+                symbol=symbol,
+                screener=screener,
+                exchange=exchange,
+                interval=TIMEFRAMES.get(tf, "5m")
+            )
+            data = handler.get_analysis()
+            ind = data.indicators
+            price = ind.get("close")
+            high = ind.get("high")
+            low = ind.get("low")
+            open_price = ind.get("open") or price
+            ema20 = ind.get("EMA20") or price
+            ema50 = ind.get("EMA50") or price
+            rsi = ind.get("RSI") or 50
+            if price is None or high is None or low is None:
+                raise Exception("TradingView data belum lengkap")
+            return build_tf_data(float(price), float(open_price), float(high), float(low), float(ema20), float(ema50), float(rsi), f"TradingView {exchange}:{symbol}")
+        except Exception as e:
+            last_error = e
+            continue
+
+    raise Exception(str(last_error) if last_error else "TradingView data gagal")
 
 
 def fetch_tf(pair_key, tf):
@@ -304,11 +350,11 @@ def session_info():
 
 def sl_tp_distance(pair_key, market_range):
     """
-    FIXED RISK MODEL
+    FINAL RISK MODEL
     XAUUSD:
-    - Min SL 30 pips = 0.30
-    - Max SL 50 pips = 0.50
-    - TP dihitung dari risk: TP1 1:2, TP2 1:3, TP3 1:4
+    - SL min 30 pips = 0.30
+    - SL max 50 pips = 0.50
+    - TP fixed: 60 / 80 / 100 pips = 0.60 / 0.80 / 1.00
     """
 
     if pair_key == "XAUUSD":
@@ -621,16 +667,18 @@ Coba ulang 30-60 detik lagi.
         zf_high = min(price, m15["eq"]) - sl_dist * 0.12
         entry_mid_temp = (entry_low + entry_high) / 2
         if pair_key == "XAUUSD":
-            # XAU fixed risk: SL 30-50 pips dari entry, bukan swing jauh
+            # XAU fixed: SL 30-50 pips, TP 60/80/100 pips
             sl = entry_mid_temp - sl_dist
+            tp1 = entry_mid_temp + 0.60
+            tp2 = entry_mid_temp + 0.80
+            tp3 = entry_mid_temp + 1.00
         else:
             raw_sl = min(m5["low"], m15["low"], zf_low - sl_dist * 0.45)
             sl = max(raw_sl, entry_mid_temp - sl_dist)
-
-        risk = abs(entry_mid_temp - sl)
-        tp1 = entry_mid_temp + (risk * 2)
-        tp2 = entry_mid_temp + (risk * 3)
-        tp3 = entry_mid_temp + (risk * 4)
+            risk = abs(entry_mid_temp - sl)
+            tp1 = entry_mid_temp + (risk * 2)
+            tp2 = entry_mid_temp + (risk * 3)
+            tp3 = entry_mid_temp + (risk * 4)
         action = "🟢 BUY PLAN"
         invalid = "Invalid kalau SSL/discount POI jebol dan candle close bearish kuat."
         confluence = [
@@ -649,16 +697,18 @@ Coba ulang 30-60 detik lagi.
         zf_high = max(price, m15["eq"]) + sl_dist * 0.40
         entry_mid_temp = (entry_low + entry_high) / 2
         if pair_key == "XAUUSD":
-            # XAU fixed risk: SL 30-50 pips dari entry, bukan swing jauh
+            # XAU fixed: SL 30-50 pips, TP 60/80/100 pips
             sl = entry_mid_temp + sl_dist
+            tp1 = entry_mid_temp - 0.60
+            tp2 = entry_mid_temp - 0.80
+            tp3 = entry_mid_temp - 1.00
         else:
             raw_sl = max(m5["high"], m15["high"], zf_high + sl_dist * 0.45)
             sl = min(raw_sl, entry_mid_temp + sl_dist)
-
-        risk = abs(sl - entry_mid_temp)
-        tp1 = entry_mid_temp - (risk * 2)
-        tp2 = entry_mid_temp - (risk * 3)
-        tp3 = entry_mid_temp - (risk * 4)
+            risk = abs(sl - entry_mid_temp)
+            tp1 = entry_mid_temp - (risk * 2)
+            tp2 = entry_mid_temp - (risk * 3)
+            tp3 = entry_mid_temp - (risk * 4)
         action = "🔴 SELL PLAN"
         invalid = "Invalid kalau BSL/premium POI jebol dan candle close bullish kuat."
         confluence = [
@@ -786,7 +836,7 @@ TOTAL: <b>{smc['Total']}/100</b>
 Grade: <b>{grade}</b>
 Confidence: <b>{confidence}%</b>
 {conf_bar(confidence)}
-RR Target: <b>1:{rr}</b>
+RR Target: <b>Dynamic</b>
 Trade ID: <code>{trade_id}</code>
 
 🧩 <b>Confluence</b>
@@ -797,7 +847,7 @@ Trade ID: <code>{trade_id}</code>
 • {confluence[4]}
 
 🛡️ <b>Management</b>
-Entry kecil dulu. SL 30-50 pips. TP1 RR 1:2 kena → geser SL ke BE.
+Entry kecil dulu. XAU SL 30-50 pips. TP XAU 60/80/100 pips. TP1 kena → geser SL ke BE.
 {invalid}
 
 ⚠️ <b>DISCLAIMER</b>
@@ -1754,8 +1804,9 @@ def main():
     app.job_queue.run_daily(session_broadcast, time=dt_time(hour=6, minute=0)) # 13:00 WIB
     app.job_queue.run_daily(session_broadcast, time=dt_time(hour=12, minute=0)) # 19:00 WIB
 
-    print("CAPITAL ELITE PROJECT V9 PREMIUM ONLINE...")
-    app.run_polling()
+    print("CAPITAL ELITE PROJECT V9 FINAL ONLINE...")
+    print("Jika muncul Telegram Conflict, pastikan tidak ada CMD/Replit/Railway lain memakai token yang sama.")
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
