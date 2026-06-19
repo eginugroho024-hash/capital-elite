@@ -121,6 +121,20 @@ def clean_num(value):
     return float(m.group(0)) if m else None
 
 
+def xau_pips(value):
+    """
+    XAUUSD Indonesian gold convention:
+    1.00 = 10 pips
+    3.00 = 30 pips
+    5.00 = 50 pips
+    10.00 = 100 pips
+    """
+    try:
+        return int(round(abs(float(value)) * 10))
+    except Exception:
+        return 0
+
+
 def conf_bar(conf):
     full = max(0, min(10, int(conf / 10)))
     return "█" * full + "░" * (10 - full)
@@ -351,15 +365,17 @@ def session_info():
 def sl_tp_distance(pair_key, market_range):
     """
     FINAL RISK MODEL
-    XAUUSD:
-    - SL min 30 pips = 0.30
-    - SL max 50 pips = 0.50
-    - TP fixed: 60 / 80 / 100 pips = 0.60 / 0.80 / 1.00
+    XAUUSD khusus:
+    - SL fixed 50 pips = 5.00
+    - TP1 fixed 60 pips = 6.00
+    - TP2 fixed 80 pips = 8.00
+    - TP3 fixed 100 pips = 10.00
+
+    Pair lain tetap dynamic sesuai karakter market.
     """
 
     if pair_key == "XAUUSD":
-        sl = max(0.30, min(market_range * 0.35, 0.50))
-        return sl, sl
+        return 5.00, 5.00
 
     if pair_key == "XAGUSD":
         sl = max(0.030, min(market_range * 0.35, 0.050))
@@ -667,11 +683,20 @@ Coba ulang 30-60 detik lagi.
         zf_high = min(price, m15["eq"]) - sl_dist * 0.12
         entry_mid_temp = (entry_low + entry_high) / 2
         if pair_key == "XAUUSD":
-            # XAU fixed: SL 30-50 pips, TP 60/80/100 pips
-            sl = entry_mid_temp - sl_dist
-            tp1 = entry_mid_temp + 0.60
-            tp2 = entry_mid_temp + 0.80
-            tp3 = entry_mid_temp + 1.00
+            # XAU final Indonesia convention:
+            # SL 50 pips = 5.00, TP 60/80/100 pips = 6.00/8.00/10.00
+            entry_center = price
+            entry_low = entry_center - 1.00
+            entry_high = entry_center + 1.00
+            entry_mid_temp = (entry_low + entry_high) / 2
+
+            zf_low = entry_mid_temp - 2.50
+            zf_high = entry_mid_temp - 1.50
+
+            sl = entry_mid_temp - 5.00
+            tp1 = entry_mid_temp + 6.00
+            tp2 = entry_mid_temp + 8.00
+            tp3 = entry_mid_temp + 10.00
         else:
             raw_sl = min(m5["low"], m15["low"], zf_low - sl_dist * 0.45)
             sl = max(raw_sl, entry_mid_temp - sl_dist)
@@ -697,11 +722,20 @@ Coba ulang 30-60 detik lagi.
         zf_high = max(price, m15["eq"]) + sl_dist * 0.40
         entry_mid_temp = (entry_low + entry_high) / 2
         if pair_key == "XAUUSD":
-            # XAU fixed: SL 30-50 pips, TP 60/80/100 pips
-            sl = entry_mid_temp + sl_dist
-            tp1 = entry_mid_temp - 0.60
-            tp2 = entry_mid_temp - 0.80
-            tp3 = entry_mid_temp - 1.00
+            # XAU final Indonesia convention:
+            # SL 50 pips = 5.00, TP 60/80/100 pips = 6.00/8.00/10.00
+            entry_center = price
+            entry_low = entry_center - 1.00
+            entry_high = entry_center + 1.00
+            entry_mid_temp = (entry_low + entry_high) / 2
+
+            zf_low = entry_mid_temp + 1.50
+            zf_high = entry_mid_temp + 2.50
+
+            sl = entry_mid_temp + 5.00
+            tp1 = entry_mid_temp - 6.00
+            tp2 = entry_mid_temp - 8.00
+            tp3 = entry_mid_temp - 10.00
         else:
             raw_sl = max(m5["high"], m15["high"], zf_high + sl_dist * 0.45)
             sl = min(raw_sl, entry_mid_temp + sl_dist)
@@ -722,7 +756,21 @@ Coba ulang 30-60 detik lagi.
     grade = "A+" if confidence >= 88 and smc["Total"] >= 82 else "A" if confidence >= 78 else "B" if confidence >= 66 else "C"
     setup_name = "💎 INSTITUTIONAL SETUP" if grade == "A+" else "🚀 SNIPER SETUP" if grade == "A" else "🟡 RETEST SETUP" if grade == "B" else "⚪ WAIT"
     entry_mid = (entry_low + entry_high) / 2
-    rr = round(abs(tp2 - entry_mid) / max(abs(entry_mid - sl), 0.00001), 1)
+    risk_value = abs(entry_mid - sl)
+    rr = round(abs(tp2 - entry_mid) / max(risk_value, 0.00001), 1)
+
+    if pair_key == "XAUUSD":
+        risk_text = f"{xau_pips(risk_value)} pips"
+        tp1_text = f"{fmt(tp1)} (+{xau_pips(tp1 - entry_mid)} pips)"
+        tp2_text = f"{fmt(tp2)} (+{xau_pips(tp2 - entry_mid)} pips)"
+        tp3_text = f"{fmt(tp3)} (+{xau_pips(tp3 - entry_mid)} pips)"
+        rr_text = "SL 50 pips • TP1 60 pips • TP2 80 pips • TP3 100 pips"
+    else:
+        risk_text = fmt(risk_value)
+        tp1_text = fmt(tp1)
+        tp2_text = fmt(tp2)
+        tp3_text = fmt(tp3)
+        rr_text = f"1:{rr}"
 
     if compact:
         return {
@@ -810,9 +858,9 @@ Price: <code>{fmt(price)}</code>
 <code>{fmt(sl)}</code>
 
 🎯 <b>Take Profit</b>
-TP1: <code>{fmt(tp1)}</code>
-TP2: <code>{fmt(tp2)}</code>
-TP3: <code>{fmt(tp3)}</code>
+TP1: <code>{tp1_text}</code>
+TP2: <code>{tp2_text}</code>
+TP3: <code>{tp3_text}</code>
 
 🔥 <b>Liquidity Heatmap</b>
 BSL: <code>{fmt(buy_liq[0])}</code> / <code>{fmt(buy_liq[1])}</code>
@@ -836,7 +884,8 @@ TOTAL: <b>{smc['Total']}/100</b>
 Grade: <b>{grade}</b>
 Confidence: <b>{confidence}%</b>
 {conf_bar(confidence)}
-RR Target: <b>Dynamic</b>
+Risk: <b>{risk_text}</b>
+Reward: <b>{rr_text}</b>
 Trade ID: <code>{trade_id}</code>
 
 🧩 <b>Confluence</b>
@@ -847,7 +896,7 @@ Trade ID: <code>{trade_id}</code>
 • {confluence[4]}
 
 🛡️ <b>Management</b>
-Entry kecil dulu. XAU SL 30-50 pips. TP XAU 60/80/100 pips. TP1 kena → geser SL ke BE.
+Entry kecil dulu. XAU fixed: SL 50 pips, TP 60/80/100 pips. Pair lain tetap dynamic.
 {invalid}
 
 ⚠️ <b>DISCLAIMER</b>
