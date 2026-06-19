@@ -1854,8 +1854,11 @@ def main():
     app.job_queue.run_daily(session_broadcast, time=dt_time(hour=12, minute=0)) # 19:00 WIB
 
     print("CAPITAL ELITE PROJECT V9 FINAL ONLINE...")
-    print("Jika muncul Telegram Conflict, pastikan tidak ada CMD/Replit/Railway lain memakai token yang sama.")
-    app.run_polling(drop_pending_updates=True)
+    print("Startup safe mode: delete webhook + drop pending updates.")
+    app.run_polling(
+        drop_pending_updates=True,
+        close_loop=False
+    )
 
 
 if __name__ == "__main__":
