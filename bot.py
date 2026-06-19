@@ -308,46 +308,38 @@ def sl_tp_distance(pair_key, market_range):
     XAUUSD:
     - Min SL 30 pips = 0.30
     - Max SL 50 pips = 0.50
-    - TP minimal 60 pips = 0.60
-
-    Pair lain tetap pakai model aman sesuai karakter market.
+    - TP dihitung dari risk: TP1 1:2, TP2 1:3, TP3 1:4
     """
 
     if pair_key == "XAUUSD":
-        # pilih SL dari range market, tapi dikunci 0.30 - 0.50
         sl = max(0.30, min(market_range * 0.35, 0.50))
-        tp = max(0.60, min(sl * 2.2, 1.20))
-        return sl, tp
+        return sl, sl
 
     if pair_key == "XAGUSD":
         sl = max(0.030, min(market_range * 0.35, 0.050))
-        tp = max(0.060, min(sl * 2.2, 0.120))
-        return sl, tp
+        return sl, sl
 
-    if pair_key in ["BTCUSD"]:
-        return 150, 350
+    if pair_key == "BTCUSD":
+        return 150, 150
 
-    if pair_key in ["ETHUSD"]:
-        return 15, 35
+    if pair_key == "ETHUSD":
+        return 15, 15
 
     if pair_key in ["SOLUSD", "BNBUSD"]:
-        return 2, 5
+        return 2, 2
 
     if pair_key == "XRPUSD":
-        return 0.030, 0.070
+        return 0.030, 0.030
 
     if pair_key in ["NAS100", "US30", "SPX500"]:
-        return 40, 90
+        return 40, 40
 
     if pair_key in ["USOIL", "UKOIL"]:
-        return 0.35, 0.90
+        return 0.35, 0.35
 
-    # Forex default
     min_sl, max_sl = PAIRS[pair_key]["sl"]
-    min_tp, max_tp = PAIRS[pair_key]["tp"]
     sl = max(min_sl, min(market_range * 0.85, max_sl))
-    tp = max(min_tp, min(sl * 2.2, max_tp))
-    return sl, tp
+    return sl, sl
 
 
 def market_status(price, h1, m15, m5):
@@ -627,15 +619,18 @@ Coba ulang 30-60 detik lagi.
         entry_high = price + sl_dist * 0.05
         zf_low = min(price, m15["eq"]) - sl_dist * 0.40
         zf_high = min(price, m15["eq"]) - sl_dist * 0.12
+        entry_mid_temp = (entry_low + entry_high) / 2
         if pair_key == "XAUUSD":
-            # XAU fixed risk: SL 30-50 pips from entry area
-            temp_entry_mid = (entry_low + entry_high) / 2
-            sl = temp_entry_mid - sl_dist
+            # XAU fixed risk: SL 30-50 pips dari entry, bukan swing jauh
+            sl = entry_mid_temp - sl_dist
         else:
-            sl = min(m5["low"], m15["low"], zf_low - sl_dist * 0.45)
-        tp1 = price + tp_dist * 0.60
-        tp2 = price + tp_dist
-        tp3 = price + tp_dist * 1.45
+            raw_sl = min(m5["low"], m15["low"], zf_low - sl_dist * 0.45)
+            sl = max(raw_sl, entry_mid_temp - sl_dist)
+
+        risk = abs(entry_mid_temp - sl)
+        tp1 = entry_mid_temp + (risk * 2)
+        tp2 = entry_mid_temp + (risk * 3)
+        tp3 = entry_mid_temp + (risk * 4)
         action = "🟢 BUY PLAN"
         invalid = "Invalid kalau SSL/discount POI jebol dan candle close bearish kuat."
         confluence = [
@@ -652,15 +647,18 @@ Coba ulang 30-60 detik lagi.
         entry_high = poi_anchor + sl_dist * 0.25
         zf_low = max(price, m15["eq"]) + sl_dist * 0.12
         zf_high = max(price, m15["eq"]) + sl_dist * 0.40
+        entry_mid_temp = (entry_low + entry_high) / 2
         if pair_key == "XAUUSD":
-            # XAU fixed risk: SL 30-50 pips from entry area
-            temp_entry_mid = (entry_low + entry_high) / 2
-            sl = temp_entry_mid + sl_dist
+            # XAU fixed risk: SL 30-50 pips dari entry, bukan swing jauh
+            sl = entry_mid_temp + sl_dist
         else:
-            sl = max(m5["high"], m15["high"], zf_high + sl_dist * 0.45)
-        tp1 = price - tp_dist * 0.60
-        tp2 = price - tp_dist
-        tp3 = price - tp_dist * 1.45
+            raw_sl = max(m5["high"], m15["high"], zf_high + sl_dist * 0.45)
+            sl = min(raw_sl, entry_mid_temp + sl_dist)
+
+        risk = abs(sl - entry_mid_temp)
+        tp1 = entry_mid_temp - (risk * 2)
+        tp2 = entry_mid_temp - (risk * 3)
+        tp3 = entry_mid_temp - (risk * 4)
         action = "🔴 SELL PLAN"
         invalid = "Invalid kalau BSL/premium POI jebol dan candle close bullish kuat."
         confluence = [
@@ -799,7 +797,7 @@ Trade ID: <code>{trade_id}</code>
 • {confluence[4]}
 
 🛡️ <b>Management</b>
-Entry kecil dulu. XAU SL dikunci 30-50 pips. TP1 kena → geser SL ke BE.
+Entry kecil dulu. SL 30-50 pips. TP1 RR 1:2 kena → geser SL ke BE.
 {invalid}
 
 ⚠️ <b>DISCLAIMER</b>
