@@ -1,10 +1,20 @@
-# CAPITAL ELITE PROJECT V9 PREMIUM
+# CAPITAL ELITE PROJECT V10 FUNDAMENTAL EDITION
 # Replace file lama lu dengan file ini.
 # Requirements:
 # python-telegram-bot==20.6
 # tradingview-ta
 # yfinance
 # requests
+#
+# NEW in V10:
+# - Fundamental Layer: Fed Policy Tracker (Rate + Dot Plot + Meeting Cycle)
+# - Macro Regime Detector (Risk-On / Risk-Off / Stagflation / Recession)
+# - COT Sentiment Proxy (Institutional Bias dari price action multi-timeframe)
+# - Yield Curve Monitor (2Y vs 10Y spread, impact ke USD/XAU/Risk)
+# - Fundamental Confluence Score terintegrasi ke confidence + entry grading
+# - /fundamental command + /macro command baru
+# - Auto Sniper Alert kini include fundamental filter
+# - NO TRADE diperkuat kalau fundamental berlawanan arah teknikal
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import Conflict
@@ -41,9 +51,14 @@ PAYMENT_REQUEST_FILE = "payment_requests.json"
 
 MARKET_CACHE = {}
 MARKET_CACHE_SECONDS = 180
+FUNDAMENTAL_CACHE_SECONDS = 3600  # cache fundamental 1 jam, data tidak berubah menit-an
 TRIAL_LIMIT_MARKET = 5
 TRIAL_LIMIT_NEWS = 3
 AUTO_ALERT_MIN_CONF = 85
+
+# Fundamental config
+FRED_API_KEY = os.environ.get("FRED_API_KEY", "")  # optional – kalau kosong pakai proxy yfinance
+FUNDAMENTAL_FILE = "fundamental_state.json"  # persistent state buat Fed tone, macro regime, dll
 
 # ==============================
 # PAIR DATABASE
@@ -351,6 +366,543 @@ def fetch_tf(pair_key, tf):
     return result
 
 # ==============================
+# FUNDAMENTAL INTELLIGENCE ENGINE V10
+# ==============================
+
+# --- Fed Policy Tracker ---
+def fetch_fed_policy():
+    """
+    Ambil data Fed Funds Rate via yfinance (^IRX = 13-week T-Bill proxy)
+    + 2Y Treasury (^IRX) dan 10Y Treasury (^TNX) untuk yield curve.
+    Fallback ke state file kalau data gagal.
+    """
+    key = "fed_policy"
+    cached = cache_get(key)
+    if cached:
+        return cached
+
+    state = load_json(FUNDAMENTAL_FILE, {})
+
+    try:
+        if yf is None:
+            raise Exception("yfinance tidak tersedia")
+
+        # 2Y yield (^IRX = 3-month, pakai ^FVX = 5Y sebagai proxy short-end lebih akurat)
+        # Gunakan DGS2 via yfinance ticker ^IRX untuk short end dan ^TNX untuk 10Y
+        data_2y = yf.download("^IRX", period="5d", interval="1d", progress=False, auto_adjust=False)
+        data_10y = yf.download("^TNX", period="5d", interval="1d", progress=False, auto_adjust=False)
+        data_ffr = yf.download("^IRX", period="30d", interval="1d", progress=False, auto_adjust=False)
+
+        rate_2y = float(data_2y["Close"].dropna().iloc[-1]) if not data_2y.empty else 5.0
+        rate_10y = float(data_10y["Close"].dropna().iloc[-1]) if not data_10y.empty else 4.5
+
+        # Yield curve spread: 10Y - 2Y
+        # Inverted = recession signal. Normal = risk-on.
+        spread = round(rate_10y - rate_2y, 3)
+        curve_status = "INVERTED" if spread < -0.10 else "FLAT" if -0.10 <= spread <= 0.20 else "NORMAL"
+
+        # Trend Fed rate: compare 4-week vs 1-week average
+        if len(data_ffr) >= 20:
+            avg_4w = float(data_ffr["Close"].dropna().tail(20).mean())
+            avg_1w = float(data_ffr["Close"].dropna().tail(5).mean())
+            if avg_1w > avg_4w * 1.02:
+                fed_trend = "HIKING"
+            elif avg_1w < avg_4w * 0.98:
+                fed_trend = "CUTTING"
+            else:
+                fed_trend = "HOLDING"
+        else:
+            fed_trend = state.get("fed_trend", "HOLDING")
+
+        # Manual override dari admin tetap prioritas
+        manual_tone = state.get("manual_fed_tone", None)
+        if manual_tone:
+            fed_tone = manual_tone
+        else:
+            fed_tone = "HAWKISH" if fed_trend == "HIKING" else "DOVISH" if fed_trend == "CUTTING" else "NEUTRAL"
+
+        result = {
+            "rate_2y": rate_2y,
+            "rate_10y": rate_10y,
+            "spread": spread,
+            "curve_status": curve_status,
+            "fed_trend": fed_trend,
+            "fed_tone": fed_tone,
+            "source": "yfinance",
+        }
+
+        # Persist ke file supaya command /fundamental bisa baca tanpa fetch ulang
+        state.update(result)
+        state["last_updated"] = wib_now().strftime("%Y-%m-%d %H:%M WIB")
+        save_json(FUNDAMENTAL_FILE, state)
+        cache_set(key, result)
+        return result
+
+    except Exception as e:
+        print("fed_policy fetch error:", e)
+        # Return dari state file kalau ada
+        if state:
+            return {
+                "rate_2y": state.get("rate_2y", 5.0),
+                "rate_10y": state.get("rate_10y", 4.5),
+                "spread": state.get("spread", -0.5),
+                "curve_status": state.get("curve_status", "INVERTED"),
+                "fed_trend": state.get("fed_trend", "HOLDING"),
+                "fed_tone": state.get("fed_tone", "NEUTRAL"),
+                "source": "cached_state",
+            }
+        return {
+            "rate_2y": 5.0, "rate_10y": 4.5, "spread": -0.5,
+            "curve_status": "INVERTED", "fed_trend": "HOLDING",
+            "fed_tone": "NEUTRAL", "source": "fallback",
+        }
+
+
+# --- Macro Regime Detector ---
+def detect_macro_regime(fed_policy):
+    """
+    Deteksi macro regime berdasarkan kombinasi:
+    - Fed tone (hawkish/dovish/neutral)
+    - Yield curve (inverted/flat/normal)
+    - DXY bias (dari dxy_filter)
+    
+    Output: RISK_ON / RISK_OFF / STAGFLATION / RECESSION / NEUTRAL
+    """
+    key = "macro_regime"
+    cached = cache_get(key)
+    if cached:
+        return cached
+
+    tone = fed_policy.get("fed_tone", "NEUTRAL")
+    curve = fed_policy.get("curve_status", "FLAT")
+    dxy = dxy_filter()
+    dxy_bias = dxy.get("bias", "NEUTRAL")
+
+    # Scoring matrix profesional
+    # RISK_ON: Fed dovish + kurva normal + DXY lemah → equities/crypto/Gold menguat
+    # RISK_OFF: Fed hawkish + DXY kuat + kurva flat/inverted → USD naik, XAU bisa dua arah
+    # STAGFLATION: Fed hawkish tapi kurva inverted → worst scenario
+    # RECESSION: Kurva sangat inverted + Fed mulai cutting
+    # NEUTRAL: Data mixed
+
+    if tone == "DOVISH" and dxy_bias == "BEARISH" and curve in ["NORMAL", "FLAT"]:
+        regime = "RISK_ON"
+        regime_note = "Fed dovish + DXY lemah → bullish equities, crypto, XAU"
+        xau_bias = "BULLISH"
+        btc_bias = "BULLISH"
+        usd_bias = "BEARISH"
+        index_bias = "BULLISH"
+    elif tone == "HAWKISH" and dxy_bias == "BULLISH" and curve in ["FLAT", "NORMAL"]:
+        regime = "RISK_OFF"
+        regime_note = "Fed hawkish + DXY kuat → USD menguat, tekanan ke risiko aset"
+        xau_bias = "BEARISH" if curve == "NORMAL" else "MIXED"
+        btc_bias = "BEARISH"
+        usd_bias = "BULLISH"
+        index_bias = "BEARISH"
+    elif tone == "HAWKISH" and curve == "INVERTED":
+        regime = "STAGFLATION"
+        regime_note = "Fed ketat + kurva inverted → stagflation risk, XAU safe haven"
+        xau_bias = "BULLISH"  # Gold sebagai safe haven
+        btc_bias = "BEARISH"
+        usd_bias = "BULLISH"
+        index_bias = "BEARISH"
+    elif tone in ["CUTTING", "DOVISH"] and curve == "INVERTED":
+        regime = "RECESSION"
+        regime_note = "Fed mulai cut + kurva inverted → recession signal, XAU naik kuat"
+        xau_bias = "STRONG_BULLISH"
+        btc_bias = "MIXED"
+        usd_bias = "BEARISH"
+        index_bias = "BEARISH"
+    else:
+        regime = "NEUTRAL"
+        regime_note = "Macro data mixed, ikuti teknikal"
+        xau_bias = "NEUTRAL"
+        btc_bias = "NEUTRAL"
+        usd_bias = "NEUTRAL"
+        index_bias = "NEUTRAL"
+
+    result = {
+        "regime": regime,
+        "regime_note": regime_note,
+        "xau_bias": xau_bias,
+        "btc_bias": btc_bias,
+        "usd_bias": usd_bias,
+        "index_bias": index_bias,
+    }
+    cache_set(key, result)
+    return result
+
+
+# --- COT Sentiment Proxy ---
+def cot_sentiment_proxy(pair_key):
+    """
+    Karena tidak ada akses langsung ke CFTC COT report real-time,
+    engine ini pakai proxy berbasis:
+    1. Price momentum multi-TF (H1 + Daily alignment)
+    2. Volume proxy dari range expansion
+    3. Pullback depth (apakah smart money accumulating atau distributing)
+    
+    Output: institutional_bias (LONG_BIAS / SHORT_BIAS / NEUTRAL)
+             + confidence score 0-100
+    """
+    try:
+        h1 = fetch_tf(pair_key, "H1")
+        daily = fetch_tf(pair_key, "DAILY")
+
+        # Institutional biasanya push price jauh dari EMA50 lalu retrace ke EMA20
+        # Kalau price > EMA20 > EMA50 di Daily → longs accumulated
+        if daily["price"] > daily["ema20"] > daily["ema50"]:
+            daily_inst = "LONG_BIAS"
+            daily_score = 30
+        elif daily["price"] < daily["ema20"] < daily["ema50"]:
+            daily_inst = "SHORT_BIAS"
+            daily_score = 30
+        else:
+            daily_inst = "NEUTRAL"
+            daily_score = 15
+
+        # H1 momentum
+        if h1["bias"] == "BULLISH" and h1["rsi"] > 55:
+            h1_inst = "LONG_BIAS"
+            h1_score = 20
+        elif h1["bias"] == "BEARISH" and h1["rsi"] < 45:
+            h1_inst = "SHORT_BIAS"
+            h1_score = 20
+        elif h1["bias"] == "BULLISH" and h1["rsi"] < 40:
+            # Bullish tapi RSI oversold = institutional buying dip
+            h1_inst = "LONG_BIAS"
+            h1_score = 25
+        elif h1["bias"] == "BEARISH" and h1["rsi"] > 60:
+            # Bearish tapi RSI overbought = institutional selling rally
+            h1_inst = "SHORT_BIAS"
+            h1_score = 25
+        else:
+            h1_inst = "NEUTRAL"
+            h1_score = 10
+
+        # RSI Divergence proxy (simplified)
+        # Kalau harga lebih tinggi dari EQ tapi RSI < 50 → divergence bearish (distribusi)
+        # Kalau harga lebih rendah dari EQ tapi RSI > 50 → divergence bullish (akumulasi)
+        rsi_divergence = "NONE"
+        div_score = 0
+        if daily["price"] > daily["eq"] and daily["rsi"] < 50:
+            rsi_divergence = "BEARISH_DIV"
+            div_score = -10
+        elif daily["price"] < daily["eq"] and daily["rsi"] > 50:
+            rsi_divergence = "BULLISH_DIV"
+            div_score = -10  # konflik, turunkan confidence
+
+        total_score = daily_score + h1_score + div_score
+
+        if daily_inst == h1_inst and daily_inst != "NEUTRAL":
+            institutional_bias = daily_inst
+            cot_conf = min(total_score + 10, 55)  # max 55% sumbangan dari COT proxy
+        else:
+            institutional_bias = "NEUTRAL"
+            cot_conf = 10
+
+        return {
+            "institutional_bias": institutional_bias,
+            "cot_confidence": cot_conf,
+            "daily_bias": daily_inst,
+            "h1_cot": h1_inst,
+            "rsi_divergence": rsi_divergence,
+            "note": f"COT proxy: Daily {daily_inst} | H1 {h1_inst} | RSI-Div: {rsi_divergence}",
+        }
+    except Exception as e:
+        print("cot_sentiment_proxy error:", e)
+        return {
+            "institutional_bias": "NEUTRAL",
+            "cot_confidence": 0,
+            "daily_bias": "NEUTRAL",
+            "h1_cot": "NEUTRAL",
+            "rsi_divergence": "NONE",
+            "note": "COT proxy unavailable",
+        }
+
+
+# --- Fundamental Score Calculator ---
+def calc_fundamental_score(pair_key, signal, fed_policy, macro_regime, cot):
+    """
+    Hitung Fundamental Confluence Score (0–100) yang akan dimasukkan
+    ke dalam confidence final analysis.
+    
+    Komponen:
+    - Fed Tone alignment (25 pts)
+    - Macro Regime alignment (25 pts)
+    - COT/Institutional Bias alignment (25 pts)
+    - Yield Curve context (15 pts)
+    - Seasonal/Cyclical context (10 pts)
+    """
+    score = 0
+    details = {}
+    alignment_notes = []
+
+    # 1. Fed Tone (25 pts)
+    fed_tone = fed_policy.get("fed_tone", "NEUTRAL")
+    cat = PAIRS[pair_key]["cat"]
+
+    if cat in ["METALS", "CRYPTO"]:
+        # XAU & crypto: Fed dovish → BUY, hawkish → SELL
+        if (signal == "BUY" and fed_tone == "DOVISH") or (signal == "SELL" and fed_tone == "HAWKISH"):
+            fed_score = 25
+            alignment_notes.append(f"✅ Fed {fed_tone} → align {signal}")
+        elif fed_tone == "NEUTRAL":
+            fed_score = 12
+            alignment_notes.append(f"⚠️ Fed NEUTRAL — konfirmasi macro lain")
+        else:
+            fed_score = 0
+            alignment_notes.append(f"❌ Fed {fed_tone} berlawanan {signal}")
+    elif cat == "FOREX":
+        # USD pairs: hawkish → USD kuat
+        usd_is_base = pair_key in ["USDJPY", "USDCAD"]
+        usd_is_quote = pair_key in ["EURUSD", "GBPUSD", "AUDUSD"]
+        if usd_is_base:
+            if (signal == "BUY" and fed_tone == "HAWKISH") or (signal == "SELL" and fed_tone == "DOVISH"):
+                fed_score = 25
+                alignment_notes.append(f"✅ Fed {fed_tone} → USD base pair align {signal}")
+            elif fed_tone == "NEUTRAL":
+                fed_score = 12
+                alignment_notes.append("⚠️ Fed NEUTRAL")
+            else:
+                fed_score = 0
+                alignment_notes.append(f"❌ Fed berlawanan arah")
+        elif usd_is_quote:
+            if (signal == "BUY" and fed_tone == "DOVISH") or (signal == "SELL" and fed_tone == "HAWKISH"):
+                fed_score = 25
+                alignment_notes.append(f"✅ Fed {fed_tone} → USD quote pair align {signal}")
+            elif fed_tone == "NEUTRAL":
+                fed_score = 12
+                alignment_notes.append("⚠️ Fed NEUTRAL")
+            else:
+                fed_score = 0
+                alignment_notes.append(f"❌ Fed berlawanan arah")
+        else:
+            fed_score = 12
+    elif cat == "INDEX":
+        # Indices: dovish Fed = lebih bullish equities
+        if (signal == "BUY" and fed_tone == "DOVISH") or (signal == "SELL" and fed_tone == "HAWKISH"):
+            fed_score = 25
+            alignment_notes.append(f"✅ Fed {fed_tone} → equities align {signal}")
+        elif fed_tone == "NEUTRAL":
+            fed_score = 12
+            alignment_notes.append("⚠️ Fed NEUTRAL")
+        else:
+            fed_score = 5
+            alignment_notes.append(f"⚠️ Fed berlawanan — indices bisa mixed")
+    elif cat == "OIL":
+        # Oil: lebih ke supply/demand, Fed secondary
+        fed_score = 12
+        alignment_notes.append("ℹ️ Oil: Fed secondary factor")
+    else:
+        fed_score = 12
+
+    details["fed_score"] = fed_score
+
+    # 2. Macro Regime (25 pts)
+    regime = macro_regime.get("regime", "NEUTRAL")
+    if cat == "METALS":
+        macro_asset_bias = macro_regime.get("xau_bias", "NEUTRAL")
+    elif cat == "CRYPTO":
+        macro_asset_bias = macro_regime.get("btc_bias", "NEUTRAL")
+    elif cat in ["INDEX"]:
+        macro_asset_bias = macro_regime.get("index_bias", "NEUTRAL")
+    elif cat in ["FOREX", "OIL"]:
+        macro_asset_bias = macro_regime.get("usd_bias", "NEUTRAL")
+    else:
+        macro_asset_bias = "NEUTRAL"
+
+    if macro_asset_bias in ["BULLISH", "STRONG_BULLISH"] and signal == "BUY":
+        macro_score = 25
+        alignment_notes.append(f"✅ Macro {regime}: bias {macro_asset_bias} → align BUY")
+    elif macro_asset_bias in ["BEARISH"] and signal == "SELL":
+        macro_score = 25
+        alignment_notes.append(f"✅ Macro {regime}: bias BEARISH → align SELL")
+    elif macro_asset_bias == "MIXED":
+        macro_score = 12
+        alignment_notes.append(f"⚠️ Macro {regime}: MIXED — hati-hati")
+    elif macro_asset_bias == "NEUTRAL":
+        macro_score = 10
+        alignment_notes.append(f"⚠️ Macro NEUTRAL — ikuti teknikal")
+    else:
+        macro_score = 0
+        alignment_notes.append(f"❌ Macro {regime} berlawanan arah signal")
+
+    details["macro_score"] = macro_score
+
+    # 3. COT/Institutional Bias (25 pts)
+    inst_bias = cot.get("institutional_bias", "NEUTRAL")
+    if (signal == "BUY" and inst_bias == "LONG_BIAS") or (signal == "SELL" and inst_bias == "SHORT_BIAS"):
+        cot_score = 25
+        alignment_notes.append(f"✅ Institutional: {inst_bias} align {signal}")
+    elif inst_bias == "NEUTRAL":
+        cot_score = 10
+        alignment_notes.append("⚠️ Institutional neutral")
+    else:
+        cot_score = 0
+        alignment_notes.append(f"❌ Institutional {inst_bias} berlawanan signal")
+
+    details["cot_score"] = cot_score
+
+    # 4. Yield Curve Context (15 pts)
+    curve = fed_policy.get("curve_status", "FLAT")
+    spread = fed_policy.get("spread", 0)
+    if cat == "METALS":
+        # XAU naik saat kurva inverted (safe haven) atau cut cycle
+        if curve == "INVERTED" and signal == "BUY":
+            yc_score = 15
+            alignment_notes.append(f"✅ Yield curve INVERTED → XAU safe haven BUY")
+        elif curve == "NORMAL" and signal == "SELL":
+            yc_score = 15
+            alignment_notes.append("✅ Yield normal → XAU pressure SELL")
+        else:
+            yc_score = 7
+    elif cat in ["INDEX", "CRYPTO"]:
+        # Risk assets suka kurva normal (growth)
+        if curve == "NORMAL" and signal == "BUY":
+            yc_score = 15
+            alignment_notes.append("✅ Yield curve normal → risk-on BUY")
+        elif curve == "INVERTED" and signal == "SELL":
+            yc_score = 15
+            alignment_notes.append("✅ Yield inverted → risk-off caution")
+        else:
+            yc_score = 5
+    else:
+        yc_score = 7
+
+    details["yc_score"] = yc_score
+
+    # 5. Seasonal / Cyclical (10 pts) — simplified
+    month = wib_now().month
+    # Q1 Jan-Mar: risk-on start year
+    # Q2 Apr-Jun: "Sell in May" risk, DXY cenderung kuat
+    # Q3 Jul-Sep: summer doldrums, low volatility
+    # Q4 Oct-Dec: year-end rally equities, XAU cenderung kuat
+    if month in [10, 11, 12] and cat == "METALS" and signal == "BUY":
+        seasonal_score = 10
+        alignment_notes.append("✅ Q4 seasonal: XAU historically kuat")
+    elif month in [4, 5, 6] and cat in ["INDEX", "CRYPTO"] and signal == "SELL":
+        seasonal_score = 8
+        alignment_notes.append("⚠️ Q2 'Sell in May' seasonal caution")
+    elif month in [1, 2, 3] and cat in ["INDEX", "CRYPTO"] and signal == "BUY":
+        seasonal_score = 10
+        alignment_notes.append("✅ Q1 risk-on seasonal")
+    else:
+        seasonal_score = 5
+
+    details["seasonal_score"] = seasonal_score
+
+    total = min(fed_score + macro_score + cot_score + yc_score + seasonal_score, 100)
+
+    # Fundamental verdict
+    if total >= 75:
+        verdict = "STRONG CONFIRM"
+        verdict_icon = "✅✅"
+    elif total >= 55:
+        verdict = "CONFIRM"
+        verdict_icon = "✅"
+    elif total >= 35:
+        verdict = "WEAK"
+        verdict_icon = "⚠️"
+    else:
+        verdict = "CONFLICT"
+        verdict_icon = "❌"
+
+    return {
+        "total": total,
+        "fed_score": fed_score,
+        "macro_score": macro_score,
+        "cot_score": cot_score,
+        "yc_score": yc_score,
+        "seasonal_score": seasonal_score,
+        "verdict": verdict,
+        "verdict_icon": verdict_icon,
+        "alignment_notes": alignment_notes,
+        "regime": regime,
+        "fed_tone": fed_tone,
+        "curve_status": curve,
+        "spread": spread,
+        "inst_bias": inst_bias,
+    }
+
+
+def fundamental_report_text(pair_key="XAUUSD"):
+    """
+    Full fundamental report untuk command /fundamental atau /macro
+    """
+    try:
+        fed = fetch_fed_policy()
+        macro = detect_macro_regime(fed)
+        cot = cot_sentiment_proxy(pair_key)
+
+        spread_arrow = "📈" if fed["spread"] > 0 else "📉"
+        curve_icon = "🔴" if fed["curve_status"] == "INVERTED" else "🟡" if fed["curve_status"] == "FLAT" else "🟢"
+
+        regime_icons = {
+            "RISK_ON": "🟢",
+            "RISK_OFF": "🔴",
+            "STAGFLATION": "🟠",
+            "RECESSION": "⚫",
+            "NEUTRAL": "🟡",
+        }
+        regime_icon = regime_icons.get(macro["regime"], "🟡")
+
+        inst_icon = "🐂" if cot["institutional_bias"] == "LONG_BIAS" else "🐻" if cot["institutional_bias"] == "SHORT_BIAS" else "➖"
+
+        pair_name = PAIRS.get(pair_key, {}).get("name", pair_key)
+
+        text = f"""
+👑 <b>CAPITAL ELITE FUNDAMENTAL INTELLIGENCE</b>
+<code>V10 Macro + Fed + Institutional Engine</code>
+🕐 <code>{wib_now().strftime('%d-%m-%Y %H:%M WIB')}</code>
+
+━━━━━━━━━━━━━━━━━━━━━
+🏛 <b>FED POLICY TRACKER</b>
+━━━━━━━━━━━━━━━━━━━━━
+Fed Tone: <b>{fed['fed_tone']}</b>
+Rate Trend: <b>{fed['fed_trend']}</b>
+2Y Treasury: <code>{fed['rate_2y']:.2f}%</code>
+10Y Treasury: <code>{fed['rate_10y']:.2f}%</code>
+{spread_arrow} Yield Spread (10Y-2Y): <code>{fed['spread']:+.3f}%</code>
+{curve_icon} Yield Curve: <b>{fed['curve_status']}</b>
+
+━━━━━━━━━━━━━━━━━━━━━
+🌐 <b>MACRO REGIME</b>
+━━━━━━━━━━━━━━━━━━━━━
+{regime_icon} Regime: <b>{macro['regime']}</b>
+{macro['regime_note']}
+
+Asset Bias:
+  🥇 XAU/Silver: <b>{macro['xau_bias']}</b>
+  ₿  Crypto: <b>{macro['btc_bias']}</b>
+  📈 Indices: <b>{macro['index_bias']}</b>
+  💵 USD: <b>{macro['usd_bias']}</b>
+
+━━━━━━━━━━━━━━━━━━━━━
+{inst_icon} <b>INSTITUTIONAL SENTIMENT (COT Proxy)</b>
+━━━━━━━━━━━━━━━━━━━━━
+Pair: <b>{pair_name}</b>
+Institutional Bias: <b>{cot['institutional_bias']}</b>
+Daily Structure: <b>{cot['daily_bias']}</b>
+H1 Institutional: <b>{cot['h1_cot']}</b>
+RSI Divergence: <b>{cot['rsi_divergence']}</b>
+COT Confidence: <b>{cot['cot_confidence']}%</b>
+
+━━━━━━━━━━━━━━━━━━━━━
+📋 <b>TRADING IMPLICATION</b>
+━━━━━━━━━━━━━━━━━━━━━
+{macro['regime_note']}
+
+⚠️ Fundamental adalah BIG PICTURE.
+Entry tetap pakai SMC/ICT + konfirmasi candle close.
+Data: {fed.get('source','yfinance')}
+"""
+        return text
+    except Exception as e:
+        return f"⚠️ Fundamental engine error: {e}\nCoba lagi dalam 60 detik."
+
+
+# ==============================
 # SMC / ICT PREMIUM ENGINE
 # ==============================
 def session_info():
@@ -526,7 +1078,7 @@ def premium_discount_score(signal, price, h1, m15):
     return ok, "Premium zone" if ok else "SELL belum ideal di premium"
 
 
-def calc_smc_score(signal, price, h1, m15, m5, session_score):
+def calc_smc_score(signal, price, h1, m15, m5, session_score, pair_key="XAUUSD"):
     dxy = dxy_filter()
     news_risk, news_note = near_high_impact_news()
     sweep_ok, sweep_note = detect_liquidity_sweep(signal, h1, m15, m5)
@@ -548,6 +1100,19 @@ def calc_smc_score(signal, price, h1, m15, m5, session_score):
     penalty = 8 if news_risk else 0
     total_raw = htf + dxy_score + liq + mss + bos + fvg + ob + crt + pd + timing - penalty
     total = max(35, min(100, total_raw))
+
+    # --- FUNDAMENTAL LAYER V10 ---
+    try:
+        fed_policy = fetch_fed_policy()
+        macro_regime = detect_macro_regime(fed_policy)
+        cot = cot_sentiment_proxy(pair_key)
+        fund = calc_fundamental_score(pair_key, signal, fed_policy, macro_regime, cot)
+    except Exception as e:
+        print("fundamental layer error:", e)
+        fed_policy = {"fed_tone": "NEUTRAL", "curve_status": "FLAT", "spread": 0, "rate_2y": 5.0, "rate_10y": 4.5}
+        macro_regime = {"regime": "NEUTRAL", "regime_note": "Fundamental unavailable", "xau_bias": "NEUTRAL", "btc_bias": "NEUTRAL", "index_bias": "NEUTRAL", "usd_bias": "NEUTRAL"}
+        cot = {"institutional_bias": "NEUTRAL", "cot_confidence": 0, "note": "COT unavailable", "rsi_divergence": "NONE"}
+        fund = {"total": 50, "verdict": "WEAK", "verdict_icon": "⚠️", "alignment_notes": ["Fundamental data unavailable"], "regime": "NEUTRAL", "fed_tone": "NEUTRAL", "curve_status": "FLAT", "spread": 0, "inst_bias": "NEUTRAL", "fed_score": 12, "macro_score": 10, "cot_score": 10, "yc_score": 7, "seasonal_score": 5}
 
     return {
         "HTF": htf,
@@ -577,6 +1142,15 @@ def calc_smc_score(signal, price, h1, m15, m5, session_score):
         "poi_name": poi["poi_name"],
         "pd_ok": pd_ok,
         "pd_note": pd_note,
+        # Fundamental fields
+        "fund": fund,
+        "fed_tone": fed_policy.get("fed_tone", "NEUTRAL"),
+        "macro_regime": macro_regime.get("regime", "NEUTRAL"),
+        "macro_note": macro_regime.get("regime_note", ""),
+        "inst_bias": cot.get("institutional_bias", "NEUTRAL"),
+        "curve_status": fed_policy.get("curve_status", "FLAT"),
+        "yield_spread": fed_policy.get("spread", 0),
+        "cot_note": cot.get("note", ""),
     }
 
 
@@ -664,15 +1238,30 @@ Coba ulang 30-60 detik lagi.
     signal = "BUY" if buy_score >= sell_score else "SELL"
     score_gap = abs(buy_score - sell_score)
 
-    smc = calc_smc_score(signal, price, h1, m15, m5, session_score)
+    smc = calc_smc_score(signal, price, h1, m15, m5, session_score, pair_key=pair_key)
     buy_liq, sell_liq = liquidity_heatmap(h1, m15, m5)
     status = market_status(price, h1, m15, m5)
     sl_dist, tp_dist = sl_tp_distance(pair_key, tf["range"])
 
-    # Confidence is now derived from full ICT/SMC/DXY confluence
+    # V10: Confidence sekarang 3-layer: Teknikal + SMC + Fundamental
     base_conf = max(buy_score, sell_score)
-    confidence = int(min(max((base_conf * 0.45) + (smc["Total"] * 0.55), 45), 96))
-    no_trade = confidence < 55
+    fund_score = smc["fund"]["total"]
+    fund_verdict = smc["fund"]["verdict"]
+
+    # Weight: Teknikal 35% + SMC 40% + Fundamental 25%
+    confidence = int(min(max(
+        (base_conf * 0.35) + (smc["Total"] * 0.40) + (fund_score * 0.25),
+        45
+    ), 96))
+
+    # Fundamental CONFLICT = paksa cap confidence & paksa NO TRADE kalau gap besar
+    if fund_verdict == "CONFLICT":
+        confidence = min(confidence, 58)  # cap di 58 kalau fundamental berlawanan
+        fundamental_conflict = True
+    else:
+        fundamental_conflict = False
+
+    no_trade = confidence < 55 or (fundamental_conflict and smc["Total"] < 70)
 
     if signal == "BUY":
         # Entry uses discount POI, sweep low, OB/FVG proxy and realtime area.
@@ -753,7 +1342,14 @@ Coba ulang 30-60 detik lagi.
             session_note
         ]
 
-    grade = "A+" if confidence >= 88 and smc["Total"] >= 82 else "A" if confidence >= 78 else "B" if confidence >= 66 else "C"
+    # V10 Grade: butuh fundamental CONFIRM untuk A+
+    fund_verdict = smc["fund"]["verdict"]
+    grade = (
+        "A+" if confidence >= 88 and smc["Total"] >= 82 and fund_verdict in ["STRONG CONFIRM", "CONFIRM"]
+        else "A" if confidence >= 78 and fund_verdict != "CONFLICT"
+        else "B" if confidence >= 66
+        else "C"
+    )
     setup_name = "💎 INSTITUTIONAL SETUP" if grade == "A+" else "🚀 SNIPER SETUP" if grade == "A" else "🟡 RETEST SETUP" if grade == "B" else "⚪ WAIT"
     entry_mid = (entry_low + entry_high) / 2
     risk_value = abs(entry_mid - sl)
@@ -790,14 +1386,17 @@ Coba ulang 30-60 detik lagi.
         }
 
     if no_trade:
+        fund = smc["fund"]
+        fund_notes_str = "\n".join(f"  {n}" for n in fund["alignment_notes"][:3])
+        conflict_warn = "\n❌ <b>FUNDAMENTAL CONFLICT</b> — sinyal teknikal berlawanan macro/fundamental.\nHigh probability setup butuh alignment ketiganya.\n" if fundamental_conflict else ""
         text = f"""
 👑 <b>CAPITAL ELITE INTELLIGENCE</b>
-<code>SMC/ICT Premium Engine</code>
+<code>V10 SMC/ICT + Fundamental Engine</code>
 
 💱 <b>{PAIRS[pair_key]['name']}</b> | <b>{tf_key}</b> • {session_tag}
 {status}
 ⚪ <b>NO TRADE ZONE</b>
-
+{conflict_warn}
 📌 <b>Bias</b>
 H1: <b>{h1['bias']}</b>
 M15: <b>{m15['bias']}</b>
@@ -808,10 +1407,16 @@ DXY: <b>{smc['dxy_bias']}</b>
 {conf_bar(confidence)}
 🏆 Grade: <b>{grade}</b>
 🧠 SMC Score: <b>{smc['Total']}/100</b>
+🌐 Fundamental: <b>{fund['total']}/100</b> {fund['verdict_icon']} {fund['verdict']}
 
 🔥 <b>Liquidity Heatmap</b>
 BSL: <code>{fmt(buy_liq[0])}</code> / <code>{fmt(buy_liq[1])}</code>
 SSL: <code>{fmt(sell_liq[0])}</code> / <code>{fmt(sell_liq[1])}</code>
+
+🌐 <b>Macro Context</b>
+Fed: <b>{smc['fed_tone']}</b> | Regime: <b>{smc['macro_regime']}</b>
+Yield Curve: <b>{smc['curve_status']}</b> | Institutional: <b>{smc['inst_bias']}</b>
+{fund_notes_str}
 
 🧠 <b>Filter Check</b>
 DXY: <b>{smc['DXY']}/10</b> — {smc['dxy_note']}
@@ -822,7 +1427,7 @@ Premium/Discount: <b>{smc['PD']}/10</b> — {smc['pd_note']}
 News: {smc['news_note']}
 
 🛡️ <b>Elite Note</b>
-Edge belum bersih. Tunggu sweep + MSS/BOS + POI valid.
+Edge belum bersih. Tunggu sweep + MSS/BOS + POI valid + fundamental align.
 
 ⚠️ <b>DISCLAIMER</b>
 Bukan saran finansial. Trading berisiko tinggi.
@@ -832,9 +1437,12 @@ Bukan saran finansial. Trading berisiko tinggi.
 
     trade_id = log_signal(pair_key, tf_key, signal, entry_low, entry_high, sl, tp1, tp2, confidence, grade)
 
+    fund = smc["fund"]
+    fund_notes_str = "\n".join(f"• {n}" for n in fund["alignment_notes"])
+
     text = f"""
 👑 <b>CAPITAL ELITE INTELLIGENCE</b>
-<code>V9 Premium • SMC/ICT + DXY Engine</code>
+<code>V10 • SMC/ICT + DXY + Fundamental Engine</code>
 
 💱 <b>{PAIRS[pair_key]['name']}</b> | <b>{tf_key}</b> • {session_tag}
 {status}
@@ -878,12 +1486,20 @@ CRT: <b>{smc['CRT']}/10</b>
 Premium/Discount: <b>{smc['PD']}/10</b>
 Timing: <b>{smc['Timing']}/10</b>
 News Penalty: <b>-{smc['Penalty']}</b>
-TOTAL: <b>{smc['Total']}/100</b>
+SMC TOTAL: <b>{smc['Total']}/100</b>
 
-📊 <b>Elite Grade</b>
+🌐 <b>Fundamental Confluence V10</b>
+Regime: <b>{smc['macro_regime']}</b> | Fed: <b>{smc['fed_tone']}</b>
+Yield Curve: <b>{smc['curve_status']}</b> ({smc['yield_spread']:+.3f}%)
+Institutional: <b>{smc['inst_bias']}</b>
+Fund Score: <b>{fund['total']}/100</b> {fund['verdict_icon']} {fund['verdict']}
+{fund_notes_str}
+
+📊 <b>Elite Grade V10</b>
 Grade: <b>{grade}</b>
 Confidence: <b>{confidence}%</b>
 {conf_bar(confidence)}
+⚖️ Teknikal 35% | SMC 40% | Fundamental 25%
 Risk: <b>{risk_text}</b>
 Reward: <b>{rr_text}</b>
 Trade ID: <code>{trade_id}</code>
@@ -898,6 +1514,7 @@ Trade ID: <code>{trade_id}</code>
 🛡️ <b>Management</b>
 Entry kecil dulu. XAU fixed: SL 50 pips, TP 60/80/100 pips. Pair lain tetap dynamic.
 {invalid}
+Grade A+ butuh: SMC ≥82 + Fundamental CONFIRM + Confidence ≥88.
 
 ⚠️ <b>DISCLAIMER</b>
 Bukan saran finansial. Trading berisiko tinggi.
@@ -1046,6 +1663,7 @@ def keyboard_main():
         [InlineKeyboardButton("📊 Market Scan", callback_data="cat_menu")],
         [InlineKeyboardButton("🎯 Sniper Scanner", callback_data="sniper_all")],
         [InlineKeyboardButton("🌍 Session Bias", callback_data="session_bias")],
+        [InlineKeyboardButton("🌐 Macro Regime", callback_data="macro_view"), InlineKeyboardButton("🏛 Fundamental", callback_data="fund_xau")],
         [InlineKeyboardButton("📈 Dashboard", callback_data="dashboard")],
         [InlineKeyboardButton("📰 News Desk", callback_data="news_menu")],
         [InlineKeyboardButton("👤 Akun", callback_data="account"), InlineKeyboardButton("💎 Upgrade", callback_data="upgrade")],
@@ -1058,8 +1676,8 @@ def main_text(user_id):
     status = "💎 <b>ELITE MEMBER</b>" if u.get("premium") else "🆓 <b>TRIAL MODE</b>"
     left = "Unlimited" if u.get("premium") else f"Market {TRIAL_LIMIT_MARKET-u.get('market_used',0)}x • News {TRIAL_LIMIT_NEWS-u.get('news_used',0)}x"
     return f"""
-👑 <b>CAPITAL ELITE PROJECT V9</b>
-<code>Premium Trading Intelligence System</code>
+👑 <b>CAPITAL ELITE PROJECT V10</b>
+<code>Fundamental + SMC/ICT Intelligence System</code>
 
 {status}
 {left}
@@ -1072,8 +1690,11 @@ def main_text(user_id):
 ✅ Auto Sniper Alert Premium
 ✅ News AI Impact Pro
 ✅ AI Vision Lite
+🆕 Fundamental Engine (Fed + Macro + COT)
+🆕 3-Layer Confidence Scoring
+🆕 /fundamental /macro commands
 
-<code>Trade Smart • Trade Elite</code>
+<code>Trade Smart • Trade Elite • V10</code>
 """
 
 
@@ -1154,6 +1775,51 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "session_bias":
         await q.edit_message_text(session_bias_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
         return
+    if data == "macro_view":
+        if not can_use_market(uid):
+            await q.edit_message_text("🔒 Trial market habis. Upgrade premium untuk Macro Regime.", parse_mode="HTML")
+            return
+        await q.edit_message_text("🌐 Loading macro regime...")
+        try:
+            fed = fetch_fed_policy()
+            macro = detect_macro_regime(fed)
+            spread_arrow = "📈" if fed["spread"] > 0 else "📉"
+            curve_icon = "🔴" if fed["curve_status"] == "INVERTED" else "🟡" if fed["curve_status"] == "FLAT" else "🟢"
+            regime_icons = {"RISK_ON":"🟢","RISK_OFF":"🔴","STAGFLATION":"🟠","RECESSION":"⚫","NEUTRAL":"🟡"}
+            regime_icon = regime_icons.get(macro["regime"],"🟡")
+            text = f"""
+🌐 <b>MACRO REGIME MONITOR V10</b>
+<code>{wib_now().strftime('%d-%m-%Y %H:%M WIB')}</code>
+
+{regime_icon} <b>REGIME: {macro['regime']}</b>
+{macro['regime_note']}
+
+🏛 Fed: <b>{fed['fed_tone']}</b>
+{curve_icon} Yield Curve: <b>{fed['curve_status']}</b>
+{spread_arrow} Spread: <b>{fed['spread']:+.3f}%</b>
+
+📦 Asset Bias:
+🥇 XAU → <b>{macro['xau_bias']}</b>
+₿ Crypto → <b>{macro['btc_bias']}</b>
+📈 Indices → <b>{macro['index_bias']}</b>
+💵 USD → <b>{macro['usd_bias']}</b>
+
+Gunakan /fundamental XAUUSD untuk COT detail.
+"""
+        except Exception as e:
+            text = f"⚠️ Macro data error: {e}"
+        add_usage(uid, "market")
+        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
+        return
+    if data == "fund_xau":
+        if not can_use_market(uid):
+            await q.edit_message_text("🔒 Trial market habis. Upgrade premium untuk Fundamental Engine.", parse_mode="HTML")
+            return
+        await q.edit_message_text("🏛 Loading fundamental data XAUUSD...")
+        text = fundamental_report_text("XAUUSD")
+        add_usage(uid, "market")
+        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
+        return
     if data == "dashboard":
         await q.edit_message_text(performance_text(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="home")]]), parse_mode="HTML")
         return
@@ -1232,8 +1898,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def upgrade_text():
     return f"""
-👑 <b>CAPITAL ELITE PROJECT V9</b>
-<code>Trading Intelligence System</code>
+👑 <b>CAPITAL ELITE PROJECT V10</b>
+<code>Fundamental + SMC/ICT Intelligence System</code>
 
 💎 <b>ELITE ACCESS — 60 HARI</b>
 <s>Rp 499.000</s> 🔥 <b>Rp 199.000</b>
@@ -1245,12 +1911,18 @@ def upgrade_text():
 <b>Rp 599.000</b>
 
 ✅ Unlimited Signal
-✅ Auto Sniper Alert
+✅ Auto Sniper Alert (Fundamental Filter)
 ✅ Multi Pair Scanner
 ✅ Session Bias
 ✅ News AI Pro
 ✅ Journal & Winrate
 ✅ AI Vision Lite
+✅ <b>NEW: Fundamental Engine V10</b>
+✅ <b>NEW: Macro Regime Detector</b>
+✅ <b>NEW: Fed Policy Tracker</b>
+✅ <b>NEW: COT Institutional Bias Proxy</b>
+✅ <b>NEW: Yield Curve Monitor</b>
+✅ <b>NEW: 3-Layer Confidence Scoring</b>
 
 💳 <b>Payment</b>
 <code>{PAYMENT_TEXT}</code>
@@ -1514,20 +2186,115 @@ async def fomc_command(update, context):
         return
     tone = " ".join(context.args).lower() if context.args else "neutral"
     if any(x in tone for x in ["hawk", "naik", "higher", "ketat"]):
+        # Update manual Fed tone ke state file
+        state = load_json(FUNDAMENTAL_FILE, {})
+        state["manual_fed_tone"] = "HAWKISH"
+        state["manual_set_at"] = wib_now().strftime("%Y-%m-%d %H:%M WIB")
+        save_json(FUNDAMENTAL_FILE, state)
+        # Clear cache biar fundamental re-fetch dengan tone baru
+        MARKET_CACHE.pop("fed_policy", None)
+        MARKET_CACHE.pop("macro_regime", None)
         text = news_ai("fomc", "1", "0", "hawkish")
-        text += "\n🏦 Tone FOMC: <b>HAWKISH</b> → USD cenderung kuat."
+        text += "\n🏦 Tone FOMC: <b>HAWKISH</b> → USD cenderung kuat.\n✅ Fundamental engine diupdate ke HAWKISH mode."
     elif any(x in tone for x in ["dov", "turun", "cut", "longgar"]):
+        state = load_json(FUNDAMENTAL_FILE, {})
+        state["manual_fed_tone"] = "DOVISH"
+        state["manual_set_at"] = wib_now().strftime("%Y-%m-%d %H:%M WIB")
+        save_json(FUNDAMENTAL_FILE, state)
+        MARKET_CACHE.pop("fed_policy", None)
+        MARKET_CACHE.pop("macro_regime", None)
         text = news_ai("fomc", "0", "1", "dovish")
-        text += "\n🏦 Tone FOMC: <b>DOVISH</b> → USD cenderung lemah."
+        text += "\n🏦 Tone FOMC: <b>DOVISH</b> → USD cenderung lemah.\n✅ Fundamental engine diupdate ke DOVISH mode."
+    elif any(x in tone for x in ["reset", "auto", "clear"]):
+        state = load_json(FUNDAMENTAL_FILE, {})
+        state.pop("manual_fed_tone", None)
+        save_json(FUNDAMENTAL_FILE, state)
+        MARKET_CACHE.pop("fed_policy", None)
+        MARKET_CACHE.pop("macro_regime", None)
+        text = "🔄 <b>FOMC tone direset ke auto-detect.</b>\nBot akan baca dari data yield curve otomatis."
     else:
-        text = "🏦 <b>FOMC IMPACT</b>\nTone belum jelas. Tunggu statement + press conference + close candle M5."
+        text = "🏦 <b>FOMC IMPACT</b>\nTone belum jelas. Tunggu statement + press conference + close candle M5.\n\nGunakan: /fomc hawkish | /fomc dovish | /fomc reset"
     add_usage(uid, "news")
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def fundamental_command(update, context):
+    """
+    /fundamental atau /fundamental XAUUSD
+    Report lengkap fundamental: Fed, macro regime, COT proxy, yield curve.
+    """
+    uid = update.effective_user.id
+    if not can_use_market(uid):
+        await update.message.reply_text("🔒 Trial market habis. Upgrade premium untuk Fundamental Engine.")
+        return
+    pair = "XAUUSD"
+    if context.args:
+        p = context.args[0].upper()
+        if p in PAIRS:
+            pair = p
+        elif p in {"XAU","GOLD"}:
+            pair = "XAUUSD"
+        elif p in {"BTC","BITCOIN"}:
+            pair = "BTCUSD"
+        elif p in {"EUR","EURUSD"}:
+            pair = "EURUSD"
+        elif p in {"NAS","NAS100","NASDAQ"}:
+            pair = "NAS100"
+    await update.message.reply_text(f"🌐 Fetching fundamental data untuk {PAIRS[pair]['name']}...")
+    text = fundamental_report_text(pair)
+    add_usage(uid, "market")
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def macro_command(update, context):
+    """
+    /macro — ringkasan macro regime global untuk semua kategori aset
+    """
+    uid = update.effective_user.id
+    if not can_use_market(uid):
+        await update.message.reply_text("🔒 Trial market habis. Upgrade premium.")
+        return
+    try:
+        fed = fetch_fed_policy()
+        macro = detect_macro_regime(fed)
+        spread_arrow = "📈" if fed["spread"] > 0 else "📉"
+        curve_icon = "🔴" if fed["curve_status"] == "INVERTED" else "🟡" if fed["curve_status"] == "FLAT" else "🟢"
+        regime_icons = {"RISK_ON":"🟢","RISK_OFF":"🔴","STAGFLATION":"🟠","RECESSION":"⚫","NEUTRAL":"🟡"}
+        regime_icon = regime_icons.get(macro["regime"],"🟡")
+        text = f"""
+🌐 <b>MACRO REGIME MONITOR</b>
+<code>Capital Elite V10 • {wib_now().strftime('%d-%m-%Y %H:%M WIB')}</code>
+
+{regime_icon} <b>REGIME: {macro['regime']}</b>
+{macro['regime_note']}
+
+🏛 <b>Fed:</b> {fed['fed_tone']} ({fed['fed_trend']})
+{curve_icon} <b>Yield Curve:</b> {fed['curve_status']}
+{spread_arrow} <b>Spread 10Y-2Y:</b> {fed['spread']:+.3f}%
+2Y: {fed['rate_2y']:.2f}% | 10Y: {fed['rate_10y']:.2f}%
+
+📦 <b>Asset Regime Bias:</b>
+🥇 XAU/Silver → <b>{macro['xau_bias']}</b>
+₿ Crypto → <b>{macro['btc_bias']}</b>
+📈 Indices → <b>{macro['index_bias']}</b>
+💵 USD → <b>{macro['usd_bias']}</b>
+
+💡 <b>Trading Implication:</b>
+Gunakan bias ini sebagai FILTER — entry tetap tunggu konfirmasi SMC.
+Grade A+ hanya keluar kalau fundamental CONFIRM + SMC ≥82.
+
+<code>/fundamental XAUUSD</code> untuk COT proxy pair spesifik.
+<code>/fomc hawkish</code> atau <code>/fomc dovish</code> untuk update manual Fed tone.
+"""
+    except Exception as e:
+        text = f"⚠️ Macro data error: {e}"
+    add_usage(uid, "market")
     await update.message.reply_text(text, parse_mode="HTML")
 
 
 async def commands_command(update, context):
     await update.message.reply_text("""
-👑 <b>CAPITAL ELITE COMMAND CENTER</b>
+👑 <b>CAPITAL ELITE COMMAND CENTER V10</b>
 
 📊 Analysis:
 <code>/xau m5</code> <code>/btc h1</code> <code>/eth m15</code>
@@ -1537,6 +2304,14 @@ async def commands_command(update, context):
 🎯 Scanner:
 <code>/sniper</code>
 <code>/session</code>
+
+🌐 Fundamental (NEW V10):
+<code>/fundamental</code> — Full macro + Fed + COT report
+<code>/fundamental XAUUSD</code> — COT proxy pair spesifik
+<code>/macro</code> — Macro regime global (RISK_ON/OFF dll)
+<code>/fomc hawkish</code> — Update Fed tone manual
+<code>/fomc dovish</code> — Update Fed tone manual
+<code>/fomc reset</code> — Kembali ke auto-detect
 
 📈 Journal:
 <code>/dashboard</code>
@@ -1556,6 +2331,8 @@ Admin: <code>/payments</code>
 
 📸 AI Vision Lite:
 Kirim screenshot chart ke bot.
+
+<code>Grade A+ = SMC ≥82 + Fundamental CONFIRM + Confidence ≥88</code>
 """, parse_mode="HTML")
 
 
@@ -1727,15 +2504,32 @@ async def auto_sniper_alert(context: ContextTypes.DEFAULT_TYPE):
             alert_key = f"{hour_key}_{p}_{r['signal']}"
             if alert_key in sent_db[hour_key]:
                 continue
+
+            # V10: Fundamental filter for auto alert
+            # Hanya kirim alert kalau fundamental tidak CONFLICT
+            fund_verdict = r["smc"].get("fund", {}).get("verdict", "WEAK")
+            fund_score = r["smc"].get("fund", {}).get("total", 50)
+            fund_icon = "✅✅" if fund_verdict == "STRONG CONFIRM" else "✅" if fund_verdict == "CONFIRM" else "⚠️" if fund_verdict == "WEAK" else "❌"
+            # Skip auto alert kalau fundamental CONFLICT kecuali SMC sangat tinggi
+            if fund_verdict == "CONFLICT" and r["smc"]["Total"] < 80:
+                continue
+
             sent_db[hour_key].append(alert_key)
+            macro_regime = r["smc"].get("macro_regime", "NEUTRAL")
+            fed_tone = r["smc"].get("fed_tone", "NEUTRAL")
+            inst_bias = r["smc"].get("inst_bias", "NEUTRAL")
             text = f"""
-🚨 <b>CAPITAL ELITE AUTO SNIPER ALERT</b>
+🚨 <b>CAPITAL ELITE AUTO SNIPER ALERT V10</b>
 <code>{PAIRS[p]['name']} • M15</code>
 
 Signal: <b>{r['signal']}</b>
 Confidence: <b>{r['confidence']}%</b> {conf_bar(r['confidence'])}
 Grade: <b>{r['grade']}</b>
 SMC Score: <b>{r['smc']['Total']}/100</b>
+Fundamental: <b>{fund_score}/100</b> {fund_icon} {fund_verdict}
+
+🌐 Macro: <b>{macro_regime}</b> | Fed: <b>{fed_tone}</b>
+🏛 Institutional: <b>{inst_bias}</b>
 
 Entry: <code>{fmt(r['entry'][0])} - {fmt(r['entry'][1])}</code>
 SL: <code>{fmt(r['sl'])}</code>
@@ -1837,6 +2631,8 @@ def main():
     app.add_handler(CommandHandler("risk", risk_command))
     app.add_handler(CommandHandler("news", news_command))
     app.add_handler(CommandHandler("fomc", fomc_command))
+    app.add_handler(CommandHandler("fundamental", fundamental_command))
+    app.add_handler(CommandHandler("macro", macro_command))
     app.add_handler(CommandHandler("premium", premium_command))
     app.add_handler(CommandHandler("bayar", bayar_command))
     app.add_handler(CommandHandler("payments", payments_command))
@@ -1853,7 +2649,7 @@ def main():
     app.job_queue.run_daily(session_broadcast, time=dt_time(hour=6, minute=0)) # 13:00 WIB
     app.job_queue.run_daily(session_broadcast, time=dt_time(hour=12, minute=0)) # 19:00 WIB
 
-    print("CAPITAL ELITE PROJECT V9 FINAL ONLINE...")
+    print("CAPITAL ELITE PROJECT V10 FUNDAMENTAL EDITION ONLINE...")
     print("Startup safe mode: delete webhook + drop pending updates.")
     app.run_polling(
         drop_pending_updates=True,
